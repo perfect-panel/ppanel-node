@@ -1,0 +1,7 @@
+app/Inboundbuilder/.lego/
+app/legocmd/.lego/
+.vscode/launch.json
+./vscode
+output/*
+.idea/*
+new.sh
