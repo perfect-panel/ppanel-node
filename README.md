@@ -8,7 +8,7 @@ A PPanel node server based on xray-core, modified from v2node.
 ### 一键安装
 
 ```
-wget -N https://raw.githubusercontent.com/perfect-panel/PPanel-node/master/Scripts/install.sh && bash install.sh
+wget -N https://raw.githubusercontent.com/perfect-panel/PPanel-node/master/scripts/install.sh && bash install.sh
 ```
 
 ## 构建
