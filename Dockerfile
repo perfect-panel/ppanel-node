@@ -12,6 +12,6 @@ FROM  alpine
 RUN  apk --update --no-cache add tzdata ca-certificates \
     && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
 RUN mkdir /etc/PPanel-node/
-COPY --from=builder /app/ppnode /usr/local/bin
+COPY --from=builder /app/output/ppnode /usr/local/bin
 
 ENTRYPOINT [ "ppnode", "server", "--config", "/etc/PPanel-node/config.yml"]
