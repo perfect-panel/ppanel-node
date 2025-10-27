@@ -6,18 +6,16 @@ import (
 
 	"github.com/perfect-panel/ppanel-node/api/panel"
 	"github.com/perfect-panel/ppanel-node/common/task"
-	"github.com/perfect-panel/ppanel-node/core"
 	vCore "github.com/perfect-panel/ppanel-node/core"
 	"github.com/perfect-panel/ppanel-node/limiter"
 	log "github.com/sirupsen/logrus"
 )
 
 type Controller struct {
-	server                  *core.XrayCore
+	server                  *vCore.XrayCore
 	apiClient               *panel.ClientV1
 	tag                     string
 	limiter                 *limiter.Limiter
-	traffic                 map[string]int64
 	userList                []panel.UserInfo
 	aliveMap                map[int]int
 	info                    *panel.NodeInfo

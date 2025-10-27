@@ -16,13 +16,21 @@ func New(core *vCore.XrayCore, config *conf.Conf, serverconfig *panel.ServerConf
 	node := &Node{
 		controllers: make([]*Controller, len(*serverconfig.Data.Protocols)),
 	}
+	pushinterval := serverconfig.Data.PushInterval
+	if pushinterval <= 0 {
+		pushinterval = 60
+	}
+	pullinterval := serverconfig.Data.PullInterval
+	if pullinterval <= 0 {
+		pullinterval = 60
+	}
 	for i, nodeconfig := range *serverconfig.Data.Protocols {
 		n := &panel.NodeInfo{
 			Id:                     config.ApiConfig.ServerId,
 			Type:                   nodeconfig.Type,
 			TrafficReportThreshold: serverconfig.Data.TrafficReportThreshold,
-			PushInterval:           serverconfig.Data.PushInterval,
-			PullInterval:           serverconfig.Data.PullInterval,
+			PushInterval:           pushinterval,
+			PullInterval:           pullinterval,
 			Protocol:               &nodeconfig,
 		}
 		p, err := panel.NewClientV1(&conf.NodeApiConfig{
