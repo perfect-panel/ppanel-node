@@ -136,8 +136,12 @@ func getCore(c *conf.Conf, serverconfig *panel.ServerConfigResponse) *core.Insta
 
 func (c *XrayCore) startTasks(serverconfig *panel.ServerConfigResponse) {
 	// fetch node info task
+	pullinverval := serverconfig.Data.PullInterval
+	if pullinverval <= 0 {
+		pullinverval = 60
+	}
 	c.serverConfigMonitorPeriodic = &task.Task{
-		Interval: time.Duration(serverconfig.Data.PullInterval) * time.Second,
+		Interval: time.Duration(pullinverval) * time.Second,
 		Execute:  c.ServerConfigMonitor,
 	}
 	_ = c.serverConfigMonitorPeriodic.Start(false)

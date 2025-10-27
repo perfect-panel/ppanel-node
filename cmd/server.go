@@ -131,10 +131,9 @@ func serverHandle(_ *cobra.Command, _ []string) {
 func reload(config string, nodes **node.Node, xcore **core.XrayCore) error {
 	// Preserve old reload channel so new core continues to receive signals
 	var oldReloadCh chan struct{}
-	var p *panel.ClientV2
+
 	if *xcore != nil {
 		oldReloadCh = (*xcore).ReloadCh
-		p = (*xcore).Client
 	}
 
 	(*nodes).Close()
@@ -146,9 +145,7 @@ func reload(config string, nodes **node.Node, xcore **core.XrayCore) error {
 	if err := newConf.LoadFromPath(config); err != nil {
 		return err
 	}
-	if p == nil {
-		p = panel.NewClientV2(&newConf.ApiConfig)
-	}
+	p := panel.NewClientV2(&newConf.ApiConfig)
 	serverconfig, err := panel.GetServerConfig(p)
 	if err != nil {
 		log.WithField("err", err).Error("获取服务端配置失败")
