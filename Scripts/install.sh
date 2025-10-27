@@ -376,7 +376,7 @@ EOF
     fi
 
 
-    curl -o /usr/bin/ppnode -Ls https://raw.githubusercontent.com/perfect-panel/PPanel-node/main/script/ppnode.sh
+    curl -o /usr/bin/ppnode -Ls https://raw.githubusercontent.com/perfect-panel/ppanel-node/master/scripts/ppnode.sh
     chmod +x /usr/bin/ppnode
 
     cd $cur_dir

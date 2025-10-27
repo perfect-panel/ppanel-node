@@ -308,7 +308,7 @@ show_log() {
 
 
 update_shell() {
-    wget -O /usr/bin/ppnode -N --no-check-certificate https://raw.githubusercontent.com/perfect-panel/PPanel-node/master/Scripts/ppnode.sh
+    wget -O /usr/bin/ppnode -N --no-check-certificate https://raw.githubusercontent.com/perfect-panel/ppanel-node/master/scripts/ppnode.sh
     if [[ $? != 0 ]]; then
         echo ""
         echo -e "${red}下载脚本失败，请检查本机能否连接 Github${plain}"
