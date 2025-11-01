@@ -12,18 +12,20 @@ import (
 )
 
 func (c *Controller) startTasks(node *panel.NodeInfo) {
-	// fetch node info task
+	// fetch user list task
 	c.userListMonitorPeriodic = &task.Task{
 		Interval: time.Duration(node.PullInterval) * time.Second,
 		Execute:  c.userListMonitor,
 	}
-	// fetch user list task
+	// report user traffic task
 	c.userReportPeriodic = &task.Task{
 		Interval: time.Duration(node.PushInterval) * time.Second,
 		Execute:  c.reportUserTrafficTask,
 	}
-
+	_ = c.userListMonitorPeriodic.Start(false)
+	log.WithField("节点", c.tag).Info("用户列表监控任务已启动")
 	_ = c.userReportPeriodic.Start(false)
+	log.WithField("节点", c.tag).Info("用户流量报告任务已启动")
 	var security string
 	switch node.Type {
 	case "vless":
@@ -81,7 +83,8 @@ func (c *Controller) userListMonitor() (err error) {
 		c.limiter.AliveList = newA
 	}
 	// update user list
-	if len(newU) == 0 {
+	// newU == nil indicates 304 Not Modified; empty slice means the list is empty
+	if newU == nil {
 		return nil
 	}
 	deleted, added := compareUserList(c.userList, newU)
