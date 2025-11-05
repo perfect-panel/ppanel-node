@@ -84,7 +84,6 @@ type Protocol struct {
 	EncryptionPrivateKey    string `json:"encryption_private_key"`
 	EncryptionClientPadding string `json:"encryption_client_padding"`
 	EncryptionPassword      string `json:"encryption_password"`
-	Ratio                   int    `json:"ratio"`
 	CertMode                string `json:"cert_mode"`
 	CertDNSProvider         string `json:"cert_dns_provider"`
 	CertDNSEnv              string `json:"cert_dns_env"`
