@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"fmt"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"runtime"
@@ -66,6 +69,15 @@ func serverHandle(_ *cobra.Command, _ []string) {
 			log.WithField("err", err).Error("打开日志文件失败，使用stdout替代")
 		}
 		log.SetOutput(f)
+	}
+	// Enable pprof if configured
+	if c.PprofPort != 0 {
+		go func() {
+			log.Infof("Starting pprof server on :%d", c.PprofPort)
+			if err := http.ListenAndServe(fmt.Sprintf("127.0.0.1:%d", c.PprofPort), nil); err != nil {
+				log.WithField("err", err).Error("pprof server failed")
+			}
+		}()
 	}
 	limiter.Init()
 	p := panel.NewClientV2(&c.ApiConfig)
