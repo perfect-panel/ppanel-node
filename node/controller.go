@@ -83,6 +83,9 @@ func (c *Controller) Start() error {
 // Close implement the Close() function of the service interface
 func (c *Controller) Close() error {
 	limiter.DeleteLimiter(c.tag)
+	if c.userListMonitorPeriodic != nil {
+		c.userListMonitorPeriodic.Close()
+	}
 	if c.userReportPeriodic != nil {
 		c.userReportPeriodic.Close()
 	}
