@@ -98,9 +98,21 @@ func GetServerConfig(c *ClientV2) (*ServerConfigResponse, error) {
 		ForceContentType("application/json").
 		Get(path)
 
+	// 优先检查错误,避免处理无效响应
+	if err != nil {
+		return nil, fmt.Errorf("访问 %s 失败: %v", client.BaseURL+path, err.Error())
+	}
+	
+	// 检查 HTTP 状态码
 	if r.StatusCode() == 304 {
 		return nil, nil
 	}
+	if r.StatusCode() >= 400 {
+		body := r.Body()
+		return nil, fmt.Errorf("访问 %s 失败: %s", client.BaseURL+path, string(body))
+	}
+	
+	// 只有在成功响应时才检查 hash
 	hash := sha256.Sum256(r.Body())
 	newBodyHash := hex.EncodeToString(hash[:])
 	if c.responseBodyHash == newBodyHash {
@@ -108,13 +120,6 @@ func GetServerConfig(c *ClientV2) (*ServerConfigResponse, error) {
 	}
 	c.responseBodyHash = newBodyHash
 	c.ServerConfigEtag = r.Header().Get("ETag")
-	if err != nil {
-		return nil, fmt.Errorf("访问 %s 失败: %v", client.BaseURL+path, err.Error())
-	}
-	if r.StatusCode() >= 400 {
-		body := r.Body()
-		return nil, fmt.Errorf("访问 %s 失败: %s", client.BaseURL+path, string(body))
-	}
 	if r != nil {
 		defer func() {
 			if r.RawBody() != nil {
