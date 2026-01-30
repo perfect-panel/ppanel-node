@@ -73,6 +73,9 @@ func (v *XrayCore) Start(serverconfig *panel.ServerConfigResponse) error {
 func (v *XrayCore) Close() error {
 	v.access.Lock()
 	defer v.access.Unlock()
+	if v.serverConfigMonitorPeriodic != nil {
+		v.serverConfigMonitorPeriodic.Close()
+	}
 	v.Config = nil
 	v.ihm = nil
 	v.ohm = nil
