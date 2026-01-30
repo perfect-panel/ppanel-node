@@ -109,7 +109,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.3'
+          go-version: '1.25.6'
 
       - name: Get project dependencies
         run: GOEXPERIMENT=jsonv2 go mod download
