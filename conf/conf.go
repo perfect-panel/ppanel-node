@@ -8,9 +8,10 @@ import (
 )
 
 type Conf struct {
-	LogConfig LogConfig       `mapstructure:"Log"`
-	ApiConfig ServerApiConfig `mapstructure:"Api"`
-	PprofPort int             `mapstructure:"PprofPort"`
+	LogConfig LogConfig        `mapstructure:"Log"`
+	ApiConfig ServerApiConfig  `mapstructure:"Api"`
+	PprofPort int              `mapstructure:"PprofPort"`
+	Outbound  []OutboundConfig `mapstructure:"Outbound"`
 }
 
 type LogConfig struct {
@@ -32,6 +33,15 @@ type NodeApiConfig struct {
 	SecretKey string `mapstructure:"SecretKey"`
 	NodeType  string `mapstructure:"NodeType"`
 	Timeout   int    `mapstructure:"Timeout"`
+}
+
+type OutboundConfig struct {
+	Name     string   `mapstructure:"Name"`
+	Protocol string   `mapstructure:"Protocol"`
+	Address  string   `mapstructure:"Address"`
+	Port     int      `mapstructure:"Port"`
+	Password string   `mapstructure:"Password"`
+	Rules    []string `mapstructure:"Rules"`
 }
 
 func New() *Conf {
