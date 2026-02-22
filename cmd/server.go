@@ -105,7 +105,7 @@ func serverHandle(_ *cobra.Command, _ []string) {
 		log.WithField("err", err).Error("启动节点失败")
 		return
 	}
-	log.Infof("已启动 %d 个节点", serverconfig.Data.Total)
+	log.Infof("已启动 %d 个节点（共 %d 个，%d 个已禁用）", nodes.Len(), serverconfig.Data.Total, serverconfig.Data.Total-nodes.Len())
 	if watch {
 		// On file change, just signal reload; do not run reload concurrently here
 		err = c.Watch(config, func() {
@@ -180,7 +180,7 @@ func reload(config string, nodes **node.Node, xcore **core.XrayCore) error {
 
 	*nodes = newNodes
 	*xcore = newCore
-	log.Infof("%d 个节点重启成功", serverconfig.Data.Total)
+	log.Infof("%d 个节点重启成功（共 %d 个，%d 个已禁用）", newNodes.Len(), serverconfig.Data.Total, serverconfig.Data.Total-newNodes.Len())
 	runtime.GC()
 	return nil
 }
