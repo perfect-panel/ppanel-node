@@ -14,7 +14,7 @@ type Node struct {
 
 func New(core *vCore.XrayCore, config *conf.Conf, serverconfig *panel.ServerConfigResponse) (*Node, error) {
 	node := &Node{
-		controllers: make([]*Controller, len(*serverconfig.Data.Protocols)),
+		controllers: make([]*Controller, 0, len(*serverconfig.Data.Protocols)),
 	}
 	pushinterval := serverconfig.Data.PushInterval
 	if pushinterval <= 0 {
@@ -24,7 +24,10 @@ func New(core *vCore.XrayCore, config *conf.Conf, serverconfig *panel.ServerConf
 	if pullinterval <= 0 {
 		pullinterval = 60
 	}
-	for i, nodeconfig := range *serverconfig.Data.Protocols {
+	for _, nodeconfig := range *serverconfig.Data.Protocols {
+		if !nodeconfig.Enable {
+			continue
+		}
 		n := &panel.NodeInfo{
 			Id:                     config.ApiConfig.ServerId,
 			Type:                   nodeconfig.Type,
@@ -42,10 +45,14 @@ func New(core *vCore.XrayCore, config *conf.Conf, serverconfig *panel.ServerConf
 		if err != nil {
 			return nil, err
 		}
-		node.controllers[i] = NewController(core, p, n)
+		node.controllers = append(node.controllers, NewController(core, p, n))
 	}
 
 	return node, nil
+}
+
+func (n *Node) Len() int {
+	return len(n.controllers)
 }
 
 func (n *Node) Start() error {
