@@ -8,9 +8,11 @@ import (
 )
 
 type Conf struct {
-	LogConfig LogConfig       `mapstructure:"Log"`
-	ApiConfig ServerApiConfig `mapstructure:"Api"`
-	PprofPort int             `mapstructure:"PprofPort"`
+	LogConfig       LogConfig        `mapstructure:"Log"`
+	ApiConfig       ServerApiConfig  `mapstructure:"Api"`
+	PprofPort       int              `mapstructure:"PprofPort"`
+	DefaultOutbound string           `mapstructure:"DefaultOutbound"` // Default outbound tag, empty means "Default" (freedom)
+	Outbound        []OutboundConfig `mapstructure:"Outbound"`
 }
 
 type LogConfig struct {
@@ -32,6 +34,33 @@ type NodeApiConfig struct {
 	SecretKey string `mapstructure:"SecretKey"`
 	NodeType  string `mapstructure:"NodeType"`
 	Timeout   int    `mapstructure:"Timeout"`
+}
+
+type OutboundConfig struct {
+	Name             string   `mapstructure:"Name"`
+	Protocol         string   `mapstructure:"Protocol"`
+	Address          string   `mapstructure:"Address"`
+	Port             int      `mapstructure:"Port"`
+	User             string   `mapstructure:"User"`
+	Password         string   `mapstructure:"Password"`
+	Method           string   `mapstructure:"Method"`           // Shadowsocks cipher method
+	Flow             string   `mapstructure:"Flow"`             // Trojan/VLESS flow control
+	Security         string   `mapstructure:"Security"`         // VMess security / TLS/Reality security
+	Encryption       string   `mapstructure:"Encryption"`       // VLESS encryption
+	SNI              string   `mapstructure:"SNI"`              // TLS/Reality Server Name Indication
+	Insecure         bool     `mapstructure:"Insecure"`         // TLS skip certificate verification
+	Fingerprint      string   `mapstructure:"Fingerprint"`      // TLS/Reality browser fingerprint
+	RealityPublicKey string   `mapstructure:"RealityPublicKey"` // Reality public key
+	RealityShortId   string   `mapstructure:"RealityShortId"`   // Reality short ID
+	RealitySpiderX   string   `mapstructure:"RealitySpiderX"`   // Reality spider X path
+	WgSecretKey      string   `mapstructure:"WgSecretKey"`      // WireGuard client private key
+	WgPublicKey      string   `mapstructure:"WgPublicKey"`      // WireGuard server public key
+	WgPreSharedKey   string   `mapstructure:"WgPreSharedKey"`   // WireGuard pre-shared key (optional)
+	WgAddress        []string `mapstructure:"WgAddress"`        // WireGuard client IP addresses
+	WgMTU            int      `mapstructure:"WgMTU"`            // WireGuard MTU (optional, default 1420)
+	WgKeepAlive      int      `mapstructure:"WgKeepAlive"`      // WireGuard keepalive interval (optional)
+	WgReserved       []int    `mapstructure:"WgReserved"`       // WireGuard reserved bytes (optional, for WARP)
+	Rules            []string `mapstructure:"Rules"`
 }
 
 func New() *Conf {

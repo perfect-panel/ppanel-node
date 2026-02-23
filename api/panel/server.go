@@ -32,12 +32,30 @@ type DNSItem struct {
 }
 
 type Outbound struct {
-	Name     string   `json:"name"`
-	Protocol string   `json:"protocol"`
-	Address  string   `json:"address"`
-	Port     int      `json:"port"`
-	Password string   `json:"password"`
-	Rules    []string `json:"rules"`
+	Name             string   `json:"name"`
+	Protocol         string   `json:"protocol"`
+	Address          string   `json:"address"`
+	Port             int      `json:"port"`
+	User             string   `json:"user"`
+	Password         string   `json:"password"`
+	Method           string   `json:"method"`             // Shadowsocks cipher method
+	Flow             string   `json:"flow"`               // Trojan/VLESS flow control
+	Security         string   `json:"security"`           // VMess security / TLS/Reality security
+	Encryption       string   `json:"encryption"`         // VLESS encryption
+	SNI              string   `json:"sni"`                // TLS/Reality Server Name Indication
+	Insecure         bool     `json:"insecure"`           // TLS skip certificate verification
+	Fingerprint      string   `json:"fingerprint"`        // TLS/Reality browser fingerprint
+	RealityPublicKey string   `json:"reality_public_key"` // Reality public key
+	RealityShortId   string   `json:"reality_short_id"`   // Reality short ID
+	RealitySpiderX   string   `json:"reality_spider_x"`   // Reality spider X path
+	WgSecretKey      string   `json:"wg_secret_key"`      // WireGuard client private key
+	WgPublicKey      string   `json:"wg_public_key"`      // WireGuard server public key
+	WgPreSharedKey   string   `json:"wg_preshared_key"`   // WireGuard pre-shared key (optional)
+	WgAddress        []string `json:"wg_address"`         // WireGuard client IP addresses
+	WgMTU            int      `json:"wg_mtu"`             // WireGuard MTU (optional, default 1420)
+	WgKeepAlive      int      `json:"wg_keepalive"`       // WireGuard keepalive interval (optional)
+	WgReserved       []int    `json:"wg_reserved"`        // WireGuard reserved bytes (optional, for WARP)
+	Rules            []string `json:"rules"`
 }
 
 type Protocol struct {
@@ -102,7 +120,7 @@ func GetServerConfig(c *ClientV2) (*ServerConfigResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("访问 %s 失败: %v", client.BaseURL+path, err.Error())
 	}
-	
+
 	// 检查 HTTP 状态码
 	if r.StatusCode() == 304 {
 		return nil, nil
@@ -111,7 +129,7 @@ func GetServerConfig(c *ClientV2) (*ServerConfigResponse, error) {
 		body := r.Body()
 		return nil, fmt.Errorf("访问 %s 失败: %s", client.BaseURL+path, string(body))
 	}
-	
+
 	// 只有在成功响应时才检查 hash
 	hash := sha256.Sum256(r.Body())
 	newBodyHash := hex.EncodeToString(hash[:])
