@@ -299,7 +299,6 @@ func buildShadowsocks(nodeInfo *panel.NodeInfo, inbound *coreConf.InboundDetourC
 	}
 	settings.Users = append(settings.Users, defaultSSuser)
 	settings.NetworkList = &coreConf.NetworkList{"tcp", "udp"}
-	settings.IVCheck = true
 
 	if nodeInfo.Protocol.Obfs != "" && nodeInfo.Protocol.Obfs == "http" {
 		if nodeInfo.Protocol.ObfsPath != "" || nodeInfo.Protocol.ObfsHost != "" {
@@ -342,13 +341,19 @@ func buildShadowsocks(nodeInfo *panel.NodeInfo, inbound *coreConf.InboundDetourC
 }
 
 func buildHysteria2(nodeInfo *panel.NodeInfo, inbound *coreConf.InboundDetourConfig) error {
-	inbound.Protocol = "hysteria2"
-	up := nodeInfo.Protocol.UpMbps
-	down := nodeInfo.Protocol.DownMbps
-	ignore := false
-	if up == 0 && down == 0 {
-		ignore = true
+	inbound.Protocol = "hysteria"
+	settings := &coreConf.HysteriaServerConfig{
+		Version: 2,
 	}
+	t := coreConf.TransportProtocol("hysteria")
+	up := coreConf.Bandwidth(strconv.Itoa(nodeInfo.Protocol.UpMbps) + "mbps")
+	down := coreConf.Bandwidth(strconv.Itoa(nodeInfo.Protocol.DownMbps) + "mbps")
+	inbound.StreamSetting = &coreConf.StreamConfig{Network: &t}
+	hysteriasetting := &coreConf.HysteriaConfig{
+		Version: 2,
+	}
+
+	var finalmask *coreConf.FinalMask
 	obfs := nodeInfo.Protocol.Obfs
 	obfs_password := nodeInfo.Protocol.ObfsPassword
 	if obfs != "" {
@@ -357,21 +362,30 @@ func buildHysteria2(nodeInfo *panel.NodeInfo, inbound *coreConf.InboundDetourCon
 			obfs_password = ""
 		}
 	}
-	settings := &coreConf.Hysteria2ServerConfig{
-		UpMbps:                uint64(up),
-		DownMbps:              uint64(down),
-		IgnoreClientBandwidth: ignore,
-		Obfs: &coreConf.Hysteria2ObfsConfig{
-			Type:     obfs,
-			Password: obfs_password,
-		},
+	if nodeInfo.Protocol.UpMbps > 0 || nodeInfo.Protocol.DownMbps > 0 {
+		finalmask = &coreConf.FinalMask{
+			QuicParams: &coreConf.QuicParamsConfig{
+				Congestion: "force-brutal",
+				BrutalUp:   up,
+				BrutalDown: down,
+			},
+		}
+	}
+	if obfs != "" && obfs_password != "" {
+		rawobfsJSON := json.RawMessage(fmt.Sprintf(`{"password":"%s"}`, obfs_password))
+		udp := []coreConf.Mask{
+			{
+				Type:     obfs,
+				Settings: &rawobfsJSON,
+			},
+		}
+		finalmask.Udp = udp
 	}
 
-	t := coreConf.TransportProtocol("hysteria2")
-	inbound.StreamSetting = &coreConf.StreamConfig{Network: &t}
-
+	inbound.StreamSetting.FinalMask = finalmask
 	sets, err := json.Marshal(settings)
 	inbound.Settings = (*json.RawMessage)(&sets)
+	inbound.StreamSetting.HysteriaSettings = hysteriasetting
 	if err != nil {
 		return fmt.Errorf("marshal hysteria2 settings error: %s", err)
 	}

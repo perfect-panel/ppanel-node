@@ -50,6 +50,9 @@ func New(core *vCore.XrayCore, config *conf.Conf, serverconfig *panel.ServerConf
 
 func (n *Node) Start() error {
 	for i := range n.controllers {
+		if !n.controllers[i].info.Protocol.Enable {
+			continue
+		}
 		err := n.controllers[i].Start()
 		if err != nil {
 			return fmt.Errorf("启动节点 [%s-%s-%d] 失败: %s",
