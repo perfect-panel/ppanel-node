@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -39,7 +40,7 @@ func NewController(core *vCore.XrayCore, api *panel.ClientV1, info *panel.NodeIn
 func (c *Controller) Start() error {
 	var err error
 	// Update user
-	c.userList, err = c.apiClient.GetUserList()
+	c.userList, err = c.apiClient.GetUserList(context.Background())
 	if err != nil {
 		return fmt.Errorf("get user list error: %s", err)
 	}

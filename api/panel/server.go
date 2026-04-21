@@ -1,6 +1,7 @@
 package panel
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -89,11 +90,12 @@ type Protocol struct {
 	CertDNSEnv              string `json:"cert_dns_env"`
 }
 
-func GetServerConfig(c *ClientV2) (*ServerConfigResponse, error) {
+func GetServerConfig(ctx context.Context, c *ClientV2) (*ServerConfigResponse, error) {
 	client := c.Client
 	path := fmt.Sprintf("/v2/server/%d", c.ServerId)
 	r, err := client.
 		R().
+		SetContext(ctx).
 		SetHeader("If-None-Match", c.ServerConfigEtag).
 		ForceContentType("application/json").
 		Get(path)

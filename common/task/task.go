@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -11,10 +12,10 @@ import (
 type Task struct {
 	Name     string
 	Interval time.Duration
-	Execute  func() error
-	Reload   func()
+	Execute  func(context.Context) error
 	Access   sync.RWMutex
 	Running  bool
+	ReloadCh chan struct{}
 	Stop     chan struct{}
 }
 
@@ -27,13 +28,11 @@ func (t *Task) Start(first bool) error {
 	t.Running = true
 	t.Stop = make(chan struct{})
 	t.Access.Unlock()
-
 	go func() {
 		timer := time.NewTimer(t.Interval)
 		defer timer.Stop()
 		if first {
 			if err := t.ExecuteWithTimeout(); err != nil {
-				t.safeStop()
 				return
 			}
 		}
@@ -58,20 +57,30 @@ func (t *Task) Start(first bool) error {
 }
 
 func (t *Task) ExecuteWithTimeout() error {
-	ctx, cancel := context.WithTimeout(context.Background(), min(3*t.Interval, 5*time.Minute))
+	ctx, cancel := context.WithTimeout(context.Background(), min(5*t.Interval, 5*time.Minute))
 	defer cancel()
 	done := make(chan error, 1)
 
 	go func() {
-		done <- t.Execute()
+		done <- t.Execute(ctx)
 	}()
 
 	select {
 	case <-ctx.Done():
 		log.Errorf("Task %s execution timed out, reloading", t.Name)
-		t.Reload()
+		if t.ReloadCh != nil {
+			select {
+			case t.ReloadCh <- struct{}{}:
+			default:
+			}
+		} else {
+			log.Panic("Reload failed")
+		}
 		return nil
 	case err := <-done:
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil
+		}
 		return err
 	}
 }

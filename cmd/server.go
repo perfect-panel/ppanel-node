@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	_ "net/http/pprof"
@@ -81,7 +82,7 @@ func serverHandle(_ *cobra.Command, _ []string) {
 	}
 	limiter.Init()
 	p := panel.NewClientV2(&c.ApiConfig)
-	serverconfig, err := panel.GetServerConfig(p)
+	serverconfig, err := panel.GetServerConfig(context.Background(), p)
 	if err != nil {
 		log.WithField("err", err).Error("获取服务端配置失败")
 		return
@@ -158,7 +159,7 @@ func reload(config string, nodes **node.Node, xcore **core.XrayCore) error {
 		return err
 	}
 	p := panel.NewClientV2(&newConf.ApiConfig)
-	serverconfig, err := panel.GetServerConfig(p)
+	serverconfig, err := panel.GetServerConfig(context.Background(), p)
 	if err != nil {
 		log.WithField("err", err).Error("获取服务端配置失败")
 		return err

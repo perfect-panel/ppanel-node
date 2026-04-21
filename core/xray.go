@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -146,12 +147,13 @@ func (c *XrayCore) startTasks(serverconfig *panel.ServerConfigResponse) {
 	c.serverConfigMonitorPeriodic = &task.Task{
 		Interval: time.Duration(pullinverval) * time.Second,
 		Execute:  c.ServerConfigMonitor,
+		ReloadCh: c.ReloadCh,
 	}
 	_ = c.serverConfigMonitorPeriodic.Start(false)
 }
 
-func (c *XrayCore) ServerConfigMonitor() (err error) {
-	newServerConfig, err := panel.GetServerConfig(c.Client)
+func (c *XrayCore) ServerConfigMonitor(ctx context.Context) (err error) {
+	newServerConfig, err := panel.GetServerConfig(ctx, c.Client)
 	if err != nil {
 		log.WithField("err", err).Error("获取服务端配置失败")
 		return nil

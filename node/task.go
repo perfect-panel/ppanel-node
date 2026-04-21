@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"strconv"
 	"time"
 
@@ -17,14 +18,14 @@ func (c *Controller) startTasks(node *panel.NodeInfo) {
 		Name:     "userListMonitor",
 		Interval: time.Duration(node.PullInterval) * time.Second,
 		Execute:  c.userListMonitor,
-		Reload:   c.reloadTask,
+		ReloadCh: c.server.ReloadCh,
 	}
 	// report user traffic task
 	c.userReportPeriodic = &task.Task{
 		Name:     "reportUserTraffic",
 		Interval: time.Duration(node.PushInterval) * time.Second,
 		Execute:  c.reportUserTrafficTask,
-		Reload:   c.reloadTask,
+		ReloadCh: c.server.ReloadCh,
 	}
 	_ = c.userListMonitorPeriodic.Start(false)
 	log.WithField("节点", c.tag).Info("用户列表监控任务已启动")
@@ -56,7 +57,7 @@ func (c *Controller) startTasks(node *panel.NodeInfo) {
 				Name:     "renewCert",
 				Interval: time.Hour * 24,
 				Execute:  c.renewCertTask,
-				Reload:   c.reloadTask,
+				ReloadCh: c.server.ReloadCh,
 			}
 			log.WithField("节点", c.tag).Info("证书定期更新任务已启动")
 			// delay to start renewCert
@@ -75,9 +76,9 @@ func (c *Controller) reloadTask() {
 }
 
 
-func (c *Controller) userListMonitor() (err error) {
+func (c *Controller) userListMonitor(ctx context.Context) (err error) {
 	// get user info
-	newU, err := c.apiClient.GetUserList()
+	newU, err := c.apiClient.GetUserList(ctx)
 	if err != nil {
 		log.WithFields(log.Fields{
 			"tag": c.tag,
@@ -149,14 +150,14 @@ func (c *Controller) userListMonitor() (err error) {
 	return nil
 }
 
-func (c *Controller) reportUserTrafficTask() (err error) {
+func (c *Controller) reportUserTrafficTask(ctx context.Context) (err error) {
 	var reportmin = 0
 	if c.info.TrafficReportThreshold > 0 {
 		reportmin = c.info.TrafficReportThreshold
 	}
 	userTraffic, _ := c.server.GetUserTrafficSlice(c.tag, reportmin)
 	if len(userTraffic) > 0 {
-		err = c.apiClient.ReportUserTraffic(&userTraffic)
+		err = c.apiClient.ReportUserTraffic(ctx, &userTraffic)
 		if err != nil {
 			log.WithFields(log.Fields{
 				"tag": c.tag,
@@ -184,7 +185,7 @@ func (c *Controller) reportUserTrafficTask() (err error) {
 				result = append(result, online)
 			}
 		}
-		if err = c.apiClient.ReportNodeOnlineUsers(&result); err != nil {
+		if err = c.apiClient.ReportNodeOnlineUsers(ctx, &result); err != nil {
 			log.WithFields(log.Fields{
 				"tag": c.tag,
 				"err": err,

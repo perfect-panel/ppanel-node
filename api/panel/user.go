@@ -1,6 +1,7 @@
 package panel
 
 import (
+	"context"
 	"fmt"
 	"path"
 
@@ -32,9 +33,10 @@ type AliveMap struct {
 	Alive map[int]int `json:"alive"`
 }
 
-func (c *ClientV1) GetUserList() ([]UserInfo, error) {
+func (c *ClientV1) GetUserList(ctx context.Context) ([]UserInfo, error) {
 	const p = "/v1/server/user"
 	r, err := c.Client.R().
+		SetContext(ctx).
 		SetHeader("If-None-Match", c.userEtag).
 		ForceContentType("application/json").
 		SetDoNotParseResponse(true).
@@ -121,7 +123,7 @@ type UserTraffic struct {
 	Download int64 `json:"download"`
 }
 
-func (c *ClientV1) ReportUserTraffic(userTraffic *[]UserTraffic) error {
+func (c *ClientV1) ReportUserTraffic(ctx context.Context, userTraffic *[]UserTraffic) error {
 	traffic := make([]UserTraffic, 0)
 	for _, t := range *userTraffic {
 		traffic = append(traffic, UserTraffic{
@@ -135,6 +137,7 @@ func (c *ClientV1) ReportUserTraffic(userTraffic *[]UserTraffic) error {
 		Traffic: traffic,
 	}
 	r, err := c.Client.R().
+		SetContext(ctx).
 		SetBody(req).
 		ForceContentType("application/json").
 		Post(p)
@@ -149,12 +152,13 @@ func (c *ClientV1) ReportUserTraffic(userTraffic *[]UserTraffic) error {
 	return nil
 }
 
-func (c *ClientV1) ReportNodeOnlineUsers(data *[]OnlineUser) error {
+func (c *ClientV1) ReportNodeOnlineUsers(ctx context.Context, data *[]OnlineUser) error {
 	const p = "/v1/server/online"
 	users := UserOnlineBody{
 		Users: *data,
 	}
 	r, err := c.Client.R().
+		SetContext(ctx).
 		SetBody(users).
 		ForceContentType("application/json").
 		Post(p)
