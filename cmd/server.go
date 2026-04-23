@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"net/http"
 	_ "net/http/pprof"
+	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"syscall"
 
@@ -39,6 +41,13 @@ func init() {
 		BoolVarP(&watch, "watch", "w",
 			true, "watch file path change")
 	command.AddCommand(&serverCommand)
+}
+
+type Backend struct {
+	Config   conf.ServerApiConfig
+	XrayCore *core.XrayCore
+	Nodes    *node.Node
+	ApiDir   string
 }
 
 func serverHandle(_ *cobra.Command, _ []string) {
@@ -81,32 +90,10 @@ func serverHandle(_ *cobra.Command, _ []string) {
 		}()
 	}
 	limiter.Init()
-	p := panel.NewClientV2(&c.ApiConfig)
-	serverconfig, err := panel.GetServerConfig(context.Background(), p)
-	if err != nil {
-		log.WithField("err", err).Error("获取服务端配置失败")
-		return
-	}
+	
 	var reloadCh = make(chan struct{}, 1)
-	xraycore := core.New(c, p)
-	xraycore.ReloadCh = reloadCh
-	err = xraycore.Start(serverconfig)
-	if err != nil {
-		log.WithField("err", err).Error("启动Xray核心失败")
-		return
-	}
-	defer xraycore.Close()
-	nodes, err := node.New(xraycore, c, serverconfig)
-	if err != nil {
-		log.WithField("err", err).Error("获取节点配置失败")
-		return
-	}
-	err = nodes.Start()
-	if err != nil {
-		log.WithField("err", err).Error("启动节点失败")
-		return
-	}
-	log.Infof("已启动 %d 个节点", serverconfig.Data.Total)
+	backends := startBackends(c, reloadCh)
+
 	if watch {
 		// On file change, just signal reload; do not run reload concurrently here
 		err = c.Watch(config, func() {
@@ -129,59 +116,106 @@ func serverHandle(_ *cobra.Command, _ []string) {
 	for {
 		select {
 		case <-osSignals:
-			nodes.Close()
-			_ = xraycore.Close()
+			for _, b := range backends {
+				b.Nodes.Close()
+				_ = b.XrayCore.Close()
+			}
 			return
 		case <-reloadCh:
 			log.Info("收到重启信号，正在重新加载配置...")
-			if err := reload(config, &nodes, &xraycore); err != nil {
+			if err := reload(config, &backends, reloadCh); err != nil {
 				log.WithField("err", err).Error("重启失败")
 			}
 		}
 	}
 }
 
-func reload(config string, nodes **node.Node, xcore **core.XrayCore) error {
-	// Preserve old reload channel so new core continues to receive signals
-	var oldReloadCh chan struct{}
+func startBackends(c *conf.Conf, reloadCh chan struct{}) []*Backend {
+	var backends []*Backend
+	usedPorts := make(map[int]string)
 
-	if *xcore != nil {
-		oldReloadCh = (*xcore).ReloadCh
-	}
+	for _, apiConf := range c.Nodes {
+		u, err := url.Parse(apiConf.ApiHost)
+		if err != nil {
+			log.WithField("err", err).Errorf("解析ApiHost失败: %s", apiConf.ApiHost)
+			continue
+		}
+		
+		apiDir := filepath.Join("/etc/PPanel-node", u.Hostname())
+		if err := os.MkdirAll(apiDir, 0755); err != nil {
+			log.WithField("err", err).Errorf("创建目录失败: %s", apiDir)
+			continue
+		}
 
-	(*nodes).Close()
-	if err := (*xcore).Close(); err != nil {
-		return err
+		p := panel.NewClientV2(&apiConf)
+		serverconfig, err := panel.GetServerConfig(context.Background(), p)
+		if err != nil {
+			log.WithField("err", err).Errorf("获取服务端配置失败: %s", apiConf.ApiHost)
+			continue
+		}
+		if serverconfig == nil || serverconfig.Data == nil || serverconfig.Data.Protocols == nil {
+			continue
+		}
+
+		// Check port conflicts
+		for _, proto := range *serverconfig.Data.Protocols {
+			if proto.Enable {
+				if host, exists := usedPorts[proto.Port]; exists {
+					log.Errorf("[警告] 发现重复监听端口: %d. (API: %s 与 API: %s 冲突)", proto.Port, host, apiConf.ApiHost)
+				} else {
+					usedPorts[proto.Port] = apiConf.ApiHost
+				}
+			}
+		}
+
+		xraycore := core.New(c, p)
+		xraycore.ReloadCh = reloadCh
+		err = xraycore.Start(serverconfig, apiDir)
+		if err != nil {
+			log.WithField("err", err).Errorf("启动Xray核心失败: %s", apiConf.ApiHost)
+			continue
+		}
+
+		apiConfCopy := apiConf // prevent pointer capture in loop
+		nodes, err := node.New(xraycore, &apiConfCopy, serverconfig)
+		if err != nil {
+			log.WithField("err", err).Errorf("获取节点配置失败: %s", apiConf.ApiHost)
+			xraycore.Close()
+			continue
+		}
+		err = nodes.Start()
+		if err != nil {
+			log.WithField("err", err).Errorf("启动节点失败: %s", apiConf.ApiHost)
+			xraycore.Close()
+			continue
+		}
+		log.Infof("API %s 已启动 %d 个节点", apiConf.ApiHost, serverconfig.Data.Total)
+		backends = append(backends, &Backend{
+			Config:   apiConfCopy,
+			XrayCore: xraycore,
+			Nodes:    nodes,
+			ApiDir:   apiDir,
+		})
 	}
+	return backends
+}
+
+func reload(configFile string, backends *[]*Backend, reloadCh chan struct{}) error {
+	for _, b := range *backends {
+		b.Nodes.Close()
+		if err := b.XrayCore.Close(); err != nil {
+			log.WithField("err", err).Error("关闭Xray核心失败")
+		}
+	}
+	*backends = nil
 
 	newConf := conf.New()
-	if err := newConf.LoadFromPath(config); err != nil {
-		return err
-	}
-	p := panel.NewClientV2(&newConf.ApiConfig)
-	serverconfig, err := panel.GetServerConfig(context.Background(), p)
-	if err != nil {
-		log.WithField("err", err).Error("获取服务端配置失败")
+	if err := newConf.LoadFromPath(configFile); err != nil {
 		return err
 	}
 
-	newCore := core.New(newConf, p)
-	// Reattach reload channel
-	newCore.ReloadCh = oldReloadCh
-	if err := newCore.Start(serverconfig); err != nil {
-		return err
-	}
-	newNodes, err := node.New(newCore, newConf, serverconfig)
-	if err != nil {
-		return err
-	}
-	if err := newNodes.Start(); err != nil {
-		return err
-	}
-
-	*nodes = newNodes
-	*xcore = newCore
-	log.Infof("%d 个节点重启成功", serverconfig.Data.Total)
+	*backends = startBackends(newConf, reloadCh)
+	log.Infof("全部节点重启成功，当前运行 %d 个后端", len(*backends))
 	runtime.GC()
 	return nil
 }

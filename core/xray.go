@@ -2,6 +2,9 @@ package core
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -19,6 +22,7 @@ import (
 	"github.com/xtls/xray-core/features/outbound"
 	"github.com/xtls/xray-core/features/routing"
 	coreConf "github.com/xtls/xray-core/infra/conf"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -57,10 +61,39 @@ func New(config *conf.Conf, client *panel.ClientV2) *XrayCore {
 	return core
 }
 
-func (v *XrayCore) Start(serverconfig *panel.ServerConfigResponse) error {
+func (v *XrayCore) Start(serverconfig *panel.ServerConfigResponse, apiDir string) error {
 	v.access.Lock()
 	defer v.access.Unlock()
-	v.Server = getCore(v.Config, serverconfig)
+
+	// save panel.json
+	if panelJSON, err := json.MarshalIndent(serverconfig, "", "  "); err == nil {
+		_ = os.WriteFile(filepath.Join(apiDir, "panel.json"), panelJSON, 0644)
+	}
+
+	config := getCoreConfig(v.Config, serverconfig, apiDir)
+
+	// save node.json
+	m := protojson.MarshalOptions{Multiline: true}
+	if nodeJSON, err := m.Marshal(config); err == nil {
+		_ = os.WriteFile(filepath.Join(apiDir, "node.json"), nodeJSON, 0644)
+	}
+
+	// load from file
+	fileContent, err := os.ReadFile(filepath.Join(apiDir, "node.json"))
+	if err != nil {
+		return err
+	}
+	var fileConfig core.Config
+	if err := protojson.Unmarshal(fileContent, &fileConfig); err != nil {
+		return err
+	}
+
+	server, err := core.New(&fileConfig)
+	if err != nil {
+		return err
+	}
+	v.Server = server
+
 	if err := v.Server.Start(); err != nil {
 		return err
 	}
@@ -88,12 +121,20 @@ func (v *XrayCore) Close() error {
 	return nil
 }
 
-func getCore(c *conf.Conf, serverconfig *panel.ServerConfigResponse) *core.Instance {
+func getCoreConfig(c *conf.Conf, serverconfig *panel.ServerConfigResponse, apiDir string) *core.Config {
+	errorLog := c.LogConfig.Output
+	if errorLog == "" {
+		errorLog = filepath.Join(apiDir, "error.log")
+	}
+	accessLog := c.LogConfig.Access
+	if accessLog == "none" || accessLog == "" {
+		accessLog = filepath.Join(apiDir, "access.log")
+	}
 	// Log Config
 	coreLogConfig := &coreConf.LogConfig{
 		LogLevel:  c.LogConfig.Level,
-		AccessLog: c.LogConfig.Access,
-		ErrorLog:  c.LogConfig.Output,
+		AccessLog: accessLog,
+		ErrorLog:  errorLog,
 	}
 	// Custom config
 	dnsConfig, outBoundConfig, routeConfig, err := GetCustomConfig(serverconfig)
@@ -131,11 +172,7 @@ func getCore(c *conf.Conf, serverconfig *panel.ServerConfigResponse) *core.Insta
 		Inbound:  inBoundConfig,
 		Outbound: outBoundConfig,
 	}
-	server, err := core.New(config)
-	if err != nil {
-		log.WithField("err", err).Panic("failed to create instance")
-	}
-	return server
+	return config
 }
 
 func (c *XrayCore) startTasks(serverconfig *panel.ServerConfigResponse) {

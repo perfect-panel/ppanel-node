@@ -107,7 +107,7 @@ before_show_menu() {
 }
 
 install() {
-    bash <(curl -Ls https://raw.githubusercontent.com/perfect-panel/PPanel-node/master/scripts/install.sh)
+    bash <(curl -Ls https://raw.githubusercontent.com/PanJX02/ppanel-node/master/scripts/install.sh)
     if [[ $? == 0 ]]; then
         if [[ $# == 0 ]]; then
             start
@@ -123,7 +123,7 @@ update() {
     else
         version=$2
     fi
-    bash <(curl -Ls https://raw.githubusercontent.com/perfect-panel/PPanel-node/master/scripts/install.sh) $version
+    bash <(curl -Ls https://raw.githubusercontent.com/PanJX02/ppanel-node/master/scripts/install.sh) $version
     if [[ $? == 0 ]]; then
         echo -e "${green}更新完成，已自动重启 PPanel-node，请使用 ppnode log 查看运行日志${plain}"
         exit
@@ -308,7 +308,7 @@ show_log() {
 
 
 update_shell() {
-    wget -O /usr/bin/ppnode -N --no-check-certificate https://raw.githubusercontent.com/perfect-panel/ppanel-node/master/scripts/ppnode.sh
+    wget -O /usr/bin/ppnode -N --no-check-certificate https://raw.githubusercontent.com/PanJX02/ppanel-node/master/scripts/ppnode.sh
     if [[ $? != 0 ]]; then
         echo ""
         echo -e "${red}下载脚本失败，请检查本机能否连接 Github${plain}"
@@ -435,15 +435,15 @@ Log:
   # 访问日志路径，例如logs/access.log，写none时关闭访问日志
   Access: none
 
-Api:
-  # 后端 API 地址，例如 "https://api.example.com"
-  ApiHost: ${api_host}
-  # 服务器唯一标识
-  ServerID: ${server_id}
-  # 通讯密钥，用于验证请求合法性
-  SecretKey: ${secret_key}
-  # 请求超时时间（单位：秒）
-  Timeout: 30
+Nodes:
+  - # 后端 API 地址，例如 "https://api.example.com"
+    ApiHost: ${api_host}
+    # 服务器唯一标识
+    ServerID: ${server_id}
+    # 通讯密钥，用于验证请求合法性
+    SecretKey: ${secret_key}
+    # 请求超时时间（单位：秒）
+    Timeout: 30
 EOF
         echo -e "${green}PPanel-node 配置文件生成完成,正在重新启动服务${plain}"
         if [[ x"${release}" == x"alpine" ]]; then
@@ -513,7 +513,7 @@ show_usage() {
 show_menu() {
     echo -e "
   ${green}PPanel-node 后端管理脚本，${plain}${red}不适用于docker${plain}
---- https://github.com/perfect-panel/PPanel-node ---
+--- https://github.com/PanJX02/ppanel-node ---
   ${green}0.${plain} 修改配置
 ————————————————
   ${green}1.${plain} 安装 PPanel-node

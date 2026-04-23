@@ -12,7 +12,7 @@ type Node struct {
 	controllers []*Controller
 }
 
-func New(core *vCore.XrayCore, config *conf.Conf, serverconfig *panel.ServerConfigResponse) (*Node, error) {
+func New(core *vCore.XrayCore, apiConfig *conf.ServerApiConfig, serverconfig *panel.ServerConfigResponse) (*Node, error) {
 	node := &Node{
 		controllers: make([]*Controller, len(*serverconfig.Data.Protocols)),
 	}
@@ -26,7 +26,7 @@ func New(core *vCore.XrayCore, config *conf.Conf, serverconfig *panel.ServerConf
 	}
 	for i, nodeconfig := range *serverconfig.Data.Protocols {
 		n := &panel.NodeInfo{
-			Id:                     config.ApiConfig.ServerId,
+			Id:                     apiConfig.ServerId,
 			Type:                   nodeconfig.Type,
 			TrafficReportThreshold: serverconfig.Data.TrafficReportThreshold,
 			PushInterval:           pushinterval,
@@ -34,10 +34,10 @@ func New(core *vCore.XrayCore, config *conf.Conf, serverconfig *panel.ServerConf
 			Protocol:               &nodeconfig,
 		}
 		p, err := panel.NewClientV1(&conf.NodeApiConfig{
-			APIHost:   config.ApiConfig.ApiHost,
+			APIHost:   apiConfig.ApiHost,
 			NodeType:  nodeconfig.Type,
-			NodeID:    config.ApiConfig.ServerId,
-			SecretKey: config.ApiConfig.SecretKey,
+			NodeID:    apiConfig.ServerId,
+			SecretKey: apiConfig.SecretKey,
 		})
 		if err != nil {
 			return nil, err
