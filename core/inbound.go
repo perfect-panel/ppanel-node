@@ -353,7 +353,7 @@ func buildHysteria2(nodeInfo *panel.NodeInfo, inbound *coreConf.InboundDetourCon
 		Version: 2,
 	}
 
-	var finalmask *coreConf.FinalMask
+	finalmask := &coreConf.FinalMask{}
 	obfs := nodeInfo.Protocol.Obfs
 	obfs_password := nodeInfo.Protocol.ObfsPassword
 	if obfs != "" {
@@ -363,12 +363,10 @@ func buildHysteria2(nodeInfo *panel.NodeInfo, inbound *coreConf.InboundDetourCon
 		}
 	}
 	if nodeInfo.Protocol.UpMbps > 0 || nodeInfo.Protocol.DownMbps > 0 {
-		finalmask = &coreConf.FinalMask{
-			QuicParams: &coreConf.QuicParamsConfig{
-				Congestion: "force-brutal",
-				BrutalUp:   up,
-				BrutalDown: down,
-			},
+		finalmask.QuicParams = &coreConf.QuicParamsConfig{
+			Congestion: "force-brutal",
+			BrutalUp:   up,
+			BrutalDown: down,
 		}
 	}
 	if obfs != "" && obfs_password != "" {
