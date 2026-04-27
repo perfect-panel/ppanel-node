@@ -76,14 +76,18 @@ func (v *XrayCore) Close() error {
 	defer v.access.Unlock()
 	if v.serverConfigMonitorPeriodic != nil {
 		v.serverConfigMonitorPeriodic.Close()
+		v.serverConfigMonitorPeriodic = nil
 	}
 	v.Config = nil
 	v.ihm = nil
 	v.ohm = nil
 	v.dispatcher = nil
-	err := v.Server.Close()
-	if err != nil {
-		return err
+	if v.Server != nil {
+		err := v.Server.Close()
+		v.Server = nil
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -145,9 +149,9 @@ func (c *XrayCore) startTasks(serverconfig *panel.ServerConfigResponse) {
 		pullinverval = 60
 	}
 	c.serverConfigMonitorPeriodic = &task.Task{
+		Name:     "serverConfigMonitor",
 		Interval: time.Duration(pullinverval) * time.Second,
 		Execute:  c.ServerConfigMonitor,
-		ReloadCh: c.ReloadCh,
 	}
 	_ = c.serverConfigMonitorPeriodic.Start(false)
 }
@@ -159,12 +163,13 @@ func (c *XrayCore) ServerConfigMonitor(ctx context.Context) (err error) {
 		return nil
 	}
 	if newServerConfig != nil {
-		log.Error("检测到服务端配置变更，正在重启节点...")
 		// Non-blocking signal to avoid goroutine stuck when channel is full or nil
 		if c.ReloadCh != nil {
 			select {
 			case c.ReloadCh <- struct{}{}:
+				log.Info("检测到服务端配置变更，已提交节点重启信号")
 			default:
+				log.Debug("检测到服务端配置变更，已有重启信号等待处理")
 			}
 		}
 	}

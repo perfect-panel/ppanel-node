@@ -3,7 +3,7 @@ package panel
 import (
 	"context"
 	"fmt"
-	"path"
+	"io"
 
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -41,6 +41,9 @@ func (c *ClientV1) GetUserList(ctx context.Context) ([]UserInfo, error) {
 		ForceContentType("application/json").
 		SetDoNotParseResponse(true).
 		Get(p)
+	if err != nil {
+		return nil, fmt.Errorf("访问 %s 失败: %s", endpointURL(c.APIHost, p), sanitizeError(err, c.SecretKey))
+	}
 	if r == nil || r.RawResponse == nil {
 		return nil, fmt.Errorf("服务端响应为空")
 	}
@@ -50,12 +53,9 @@ func (c *ClientV1) GetUserList(ctx context.Context) ([]UserInfo, error) {
 		return nil, nil
 	}
 
-	if err != nil {
-		return nil, fmt.Errorf("访问 %s 失败: %s", path.Join(c.APIHost+p), err)
-	}
 	if r.StatusCode() >= 400 {
-		body := r.Body()
-		return nil, fmt.Errorf("访问 %s 失败: %s", path.Join(c.APIHost+p), string(body))
+		body, _ := io.ReadAll(r.RawResponse.Body)
+		return nil, fmt.Errorf("访问 %s 失败: %s", endpointURL(c.APIHost, p), redactSecret(string(body), c.SecretKey))
 	}
 	userlist := &UserListBody{}
 	dec := jsontext.NewDecoder(r.RawResponse.Body)
@@ -142,11 +142,11 @@ func (c *ClientV1) ReportUserTraffic(ctx context.Context, userTraffic *[]UserTra
 		ForceContentType("application/json").
 		Post(p)
 	if err != nil {
-		return fmt.Errorf("访问 %s 失败: %s", path.Join(c.APIHost+p), err)
+		return fmt.Errorf("访问 %s 失败: %s", endpointURL(c.APIHost, p), sanitizeError(err, c.SecretKey))
 	}
 	if r.StatusCode() >= 400 {
 		body := r.Body()
-		return fmt.Errorf("访问 %s 失败: %s", path.Join(c.APIHost+p), string(body))
+		return fmt.Errorf("访问 %s 失败: %s", endpointURL(c.APIHost, p), redactSecret(string(body), c.SecretKey))
 	}
 
 	return nil
@@ -163,11 +163,11 @@ func (c *ClientV1) ReportNodeOnlineUsers(ctx context.Context, data *[]OnlineUser
 		ForceContentType("application/json").
 		Post(p)
 	if err != nil {
-		return fmt.Errorf("访问 %s 失败: %s", path.Join(c.APIHost+p), err)
+		return fmt.Errorf("访问 %s 失败: %s", endpointURL(c.APIHost, p), sanitizeError(err, c.SecretKey))
 	}
 	if r.StatusCode() >= 400 {
 		body := r.Body()
-		return fmt.Errorf("访问 %s 失败: %s", path.Join(c.APIHost+p), string(body))
+		return fmt.Errorf("访问 %s 失败: %s", endpointURL(c.APIHost, p), redactSecret(string(body), c.SecretKey))
 	}
 
 	return nil

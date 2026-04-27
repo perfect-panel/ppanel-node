@@ -2,7 +2,6 @@ package panel
 
 import (
 	"fmt"
-	"path"
 	"time"
 )
 
@@ -38,7 +37,7 @@ func (c *ClientV1) ReportNodeStatus(nodeStatus *NodeStatus) (err error) {
 		UpdatedAt: time.Now().UnixMilli(),
 	}
 	if _, err = c.Client.R().SetBody(status).ForceContentType("application/json").Post(p); err != nil {
-		return fmt.Errorf("访问 %s 失败: %v", path.Join(c.APIHost+p), err.Error())
+		return fmt.Errorf("访问 %s 失败: %s", endpointURL(c.APIHost, p), sanitizeError(err, c.SecretKey))
 	}
 	return nil
 }

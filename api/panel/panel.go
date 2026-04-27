@@ -1,17 +1,17 @@
 package panel
 
 import (
-	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/sirupsen/logrus"
-
 	"github.com/go-resty/resty/v2"
 	"github.com/perfect-panel/ppanel-node/conf"
 )
+
+var secretKeyPattern = regexp.MustCompile(`secret_key=[^&\s"]+`)
 
 type ClientV1 struct {
 	Client    *resty.Client
@@ -30,7 +30,25 @@ type ClientV2 struct {
 	SecretKey        string
 	ServerId         int
 	ServerConfigEtag string
-	responseBodyHash string
+	serverConfigHash string
+}
+
+func endpointURL(base, p string) string {
+	return strings.TrimRight(base, "/") + p
+}
+
+func redactSecret(s, secret string) string {
+	if secret != "" {
+		s = strings.ReplaceAll(s, secret, "<redacted>")
+	}
+	return secretKeyPattern.ReplaceAllString(s, "secret_key=<redacted>")
+}
+
+func sanitizeError(err error, secret string) string {
+	if err == nil {
+		return ""
+	}
+	return redactSecret(err.Error(), secret)
 }
 
 func NewClientV1(c *conf.NodeApiConfig) (*ClientV1, error) {
@@ -41,12 +59,6 @@ func NewClientV1(c *conf.NodeApiConfig) (*ClientV1, error) {
 	} else {
 		client.SetTimeout(30 * time.Second)
 	}
-	client.OnError(func(req *resty.Request, err error) {
-		var v *resty.ResponseError
-		if errors.As(err, &v) {
-			logrus.Error(v.Err)
-		}
-	})
 	client.SetBaseURL(c.APIHost)
 	// Check node type
 	c.NodeType = strings.ToLower(c.NodeType)
@@ -88,12 +100,6 @@ func NewClientV2(c *conf.ServerApiConfig) *ClientV2 {
 	} else {
 		client.SetTimeout(30 * time.Second)
 	}
-	client.OnError(func(req *resty.Request, err error) {
-		var v *resty.ResponseError
-		if errors.As(err, &v) {
-			logrus.Error(v.Err)
-		}
-	})
 	client.SetBaseURL(c.ApiHost)
 	client.SetQueryParams(map[string]string{
 		"secret_key": c.SecretKey,

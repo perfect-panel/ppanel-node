@@ -18,14 +18,12 @@ func (c *Controller) startTasks(node *panel.NodeInfo) {
 		Name:     "userListMonitor",
 		Interval: time.Duration(node.PullInterval) * time.Second,
 		Execute:  c.userListMonitor,
-		ReloadCh: c.server.ReloadCh,
 	}
 	// report user traffic task
 	c.userReportPeriodic = &task.Task{
 		Name:     "reportUserTraffic",
 		Interval: time.Duration(node.PushInterval) * time.Second,
 		Execute:  c.reportUserTrafficTask,
-		ReloadCh: c.server.ReloadCh,
 	}
 	_ = c.userListMonitorPeriodic.Start(false)
 	log.WithField("节点", c.tag).Info("用户列表监控任务已启动")
@@ -57,7 +55,6 @@ func (c *Controller) startTasks(node *panel.NodeInfo) {
 				Name:     "renewCert",
 				Interval: time.Hour * 24,
 				Execute:  c.renewCertTask,
-				ReloadCh: c.server.ReloadCh,
 			}
 			log.WithField("节点", c.tag).Info("证书定期更新任务已启动")
 			// delay to start renewCert
@@ -74,7 +71,6 @@ func (c *Controller) reloadTask() {
 	}
 	c.startTasks(c.info)
 }
-
 
 func (c *Controller) userListMonitor(ctx context.Context) (err error) {
 	// get user info
@@ -236,4 +232,3 @@ func compareUserList(old, new []panel.UserInfo) (deleted, added []panel.UserInfo
 
 	return deleted, added
 }
-

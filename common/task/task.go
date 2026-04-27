@@ -15,8 +15,9 @@ type Task struct {
 	Execute  func(context.Context) error
 	Access   sync.RWMutex
 	Running  bool
-	ReloadCh chan struct{}
 	Stop     chan struct{}
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
 }
 
 func (t *Task) Start(first bool) error {
@@ -27,12 +28,16 @@ func (t *Task) Start(first bool) error {
 	}
 	t.Running = true
 	t.Stop = make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.cancel = cancel
+	t.wg.Add(1)
 	t.Access.Unlock()
 	go func() {
+		defer t.wg.Done()
 		timer := time.NewTimer(t.Interval)
 		defer timer.Stop()
 		if first {
-			if err := t.ExecuteWithTimeout(); err != nil {
+			if err := t.ExecuteWithTimeout(ctx); err != nil {
 				return
 			}
 		}
@@ -44,9 +49,11 @@ func (t *Task) Start(first bool) error {
 				// continue
 			case <-t.Stop:
 				return
+			case <-ctx.Done():
+				return
 			}
 
-			if err := t.ExecuteWithTimeout(); err != nil {
+			if err := t.ExecuteWithTimeout(ctx); err != nil {
 				log.Errorf("Task %s execution error: %v", t.Name, err)
 				return
 			}
@@ -56,8 +63,8 @@ func (t *Task) Start(first bool) error {
 	return nil
 }
 
-func (t *Task) ExecuteWithTimeout() error {
-	ctx, cancel := context.WithTimeout(context.Background(), min(5*t.Interval, 5*time.Minute))
+func (t *Task) ExecuteWithTimeout(parent context.Context) error {
+	ctx, cancel := context.WithTimeout(parent, min(5*t.Interval, 5*time.Minute))
 	defer cancel()
 	done := make(chan error, 1)
 
@@ -67,15 +74,10 @@ func (t *Task) ExecuteWithTimeout() error {
 
 	select {
 	case <-ctx.Done():
-		log.Errorf("Task %s execution timed out, reloading", t.Name)
-		if t.ReloadCh != nil {
-			select {
-			case t.ReloadCh <- struct{}{}:
-			default:
-			}
-		} else {
-			log.Panic("Reload failed")
+		if errors.Is(parent.Err(), context.Canceled) {
+			return nil
 		}
+		log.Errorf("Task %s execution timed out", t.Name)
 		return nil
 	case err := <-done:
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -89,6 +91,9 @@ func (t *Task) safeStop() {
 	t.Access.Lock()
 	if t.Running {
 		t.Running = false
+		if t.cancel != nil {
+			t.cancel()
+		}
 		close(t.Stop)
 	}
 	t.Access.Unlock()
@@ -96,5 +101,6 @@ func (t *Task) safeStop() {
 
 func (t *Task) Close() {
 	t.safeStop()
+	t.wg.Wait()
 	log.Warningf("Task %s stopped", t.Name)
 }

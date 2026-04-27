@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"runtime"
 	"syscall"
+	"time"
 
 	"github.com/perfect-panel/ppanel-node/api/panel"
 	"github.com/perfect-panel/ppanel-node/conf"
@@ -23,6 +24,8 @@ var (
 	config string
 	watch  bool
 )
+
+const reloadDebounce = 60 * time.Second
 
 var serverCommand = cobra.Command{
 	Use:   "server",
@@ -95,7 +98,11 @@ func serverHandle(_ *cobra.Command, _ []string) {
 		log.WithField("err", err).Error("启动Xray核心失败")
 		return
 	}
-	defer xraycore.Close()
+	defer func() {
+		if xraycore != nil {
+			_ = xraycore.Close()
+		}
+	}()
 	nodes, err := node.New(xraycore, c, serverconfig)
 	if err != nil {
 		log.WithField("err", err).Error("获取节点配置失败")
@@ -125,14 +132,21 @@ func serverHandle(_ *cobra.Command, _ []string) {
 
 	osSignals := make(chan os.Signal, 1)
 	signal.Notify(osSignals, syscall.SIGINT, syscall.SIGTERM)
+	var lastReload time.Time
 
 	for {
 		select {
 		case <-osSignals:
 			nodes.Close()
 			_ = xraycore.Close()
+			xraycore = nil
 			return
 		case <-reloadCh:
+			if !lastReload.IsZero() && time.Since(lastReload) < reloadDebounce {
+				log.Debug("重启信号被防抖跳过")
+				continue
+			}
+			lastReload = time.Now()
 			log.Info("收到重启信号，正在重新加载配置...")
 			if err := reload(config, &nodes, &xraycore); err != nil {
 				log.WithField("err", err).Error("重启失败")
@@ -147,11 +161,6 @@ func reload(config string, nodes **node.Node, xcore **core.XrayCore) error {
 
 	if *xcore != nil {
 		oldReloadCh = (*xcore).ReloadCh
-	}
-
-	(*nodes).Close()
-	if err := (*xcore).Close(); err != nil {
-		return err
 	}
 
 	newConf := conf.New()
@@ -173,9 +182,22 @@ func reload(config string, nodes **node.Node, xcore **core.XrayCore) error {
 	}
 	newNodes, err := node.New(newCore, newConf, serverconfig)
 	if err != nil {
+		_ = newCore.Close()
 		return err
 	}
+
+	if *nodes != nil {
+		(*nodes).Close()
+	}
+	if *xcore != nil {
+		if err := (*xcore).Close(); err != nil {
+			_ = newCore.Close()
+			return err
+		}
+	}
+
 	if err := newNodes.Start(); err != nil {
+		_ = newCore.Close()
 		return err
 	}
 

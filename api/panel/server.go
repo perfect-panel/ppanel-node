@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 )
 
 type ServerConfigResponse struct {
@@ -24,6 +25,18 @@ type Data struct {
 	Outbound               *[]Outbound `json:"outbound"`
 	Protocols              *[]Protocol `json:"protocols"`
 	Total                  int         `json:"total"`
+}
+
+type semanticServerConfigData struct {
+	TrafficReportThreshold int        `json:"traffic_report_threshold"`
+	PushInterval           int        `json:"push_interval"`
+	PullInterval           int        `json:"pull_interval"`
+	IPStrategy             string     `json:"ip_strategy"`
+	DNS                    []DNSItem  `json:"dns"`
+	Block                  []string   `json:"block"`
+	Outbound               []Outbound `json:"outbound"`
+	Protocols              []Protocol `json:"protocols"`
+	Total                  int        `json:"total"`
 }
 
 type DNSItem struct {
@@ -102,42 +115,135 @@ func GetServerConfig(ctx context.Context, c *ClientV2) (*ServerConfigResponse, e
 
 	// 优先检查错误,避免处理无效响应
 	if err != nil {
-		return nil, fmt.Errorf("访问 %s 失败: %v", client.BaseURL+path, err.Error())
+		return nil, fmt.Errorf("访问 %s 失败: %s", endpointURL(client.BaseURL, path), sanitizeError(err, c.SecretKey))
 	}
-	
+
+	if r == nil {
+		return nil, fmt.Errorf("服务端返回为空")
+	}
+
 	// 检查 HTTP 状态码
 	if r.StatusCode() == 304 {
 		return nil, nil
 	}
 	if r.StatusCode() >= 400 {
 		body := r.Body()
-		return nil, fmt.Errorf("访问 %s 失败: %s", client.BaseURL+path, string(body))
+		return nil, fmt.Errorf("访问 %s 失败: %s", endpointURL(client.BaseURL, path), redactSecret(string(body), c.SecretKey))
 	}
-	
-	// 只有在成功响应时才检查 hash
-	hash := sha256.Sum256(r.Body())
-	newBodyHash := hex.EncodeToString(hash[:])
-	if c.responseBodyHash == newBodyHash {
-		return nil, nil
-	}
-	c.responseBodyHash = newBodyHash
 	c.ServerConfigEtag = r.Header().Get("ETag")
-	if r != nil {
-		defer func() {
-			if r.RawBody() != nil {
-				r.RawBody().Close()
-			}
-		}()
-	} else {
-		return nil, fmt.Errorf("服务端返回为空")
-	}
 	resp := &ServerConfigResponse{}
 	err = json.Unmarshal(r.Body(), resp)
 	if err != nil {
 		return nil, fmt.Errorf("解码响应体失败: %s", err)
 	}
-	if resp.Data.Protocols == nil {
+	if resp.Data == nil || resp.Data.Protocols == nil {
 		return nil, fmt.Errorf("协议配置为空")
 	}
+	newConfigHash, err := semanticServerConfigHash(resp)
+	if err != nil {
+		return nil, err
+	}
+	if c.serverConfigHash == newConfigHash {
+		return nil, nil
+	}
+	c.serverConfigHash = newConfigHash
 	return resp, nil
+}
+
+func semanticServerConfigHash(resp *ServerConfigResponse) (string, error) {
+	normalized := normalizeServerConfigData(resp.Data)
+	body, err := json.Marshal(normalized)
+	if err != nil {
+		return "", fmt.Errorf("编码服务端配置指纹失败: %s", err)
+	}
+	hash := sha256.Sum256(body)
+	return hex.EncodeToString(hash[:]), nil
+}
+
+func normalizeServerConfigData(data *Data) semanticServerConfigData {
+	if data == nil {
+		return semanticServerConfigData{
+			DNS:       []DNSItem{},
+			Block:     []string{},
+			Outbound:  []Outbound{},
+			Protocols: []Protocol{},
+		}
+	}
+
+	dnsItems := cloneDNSItems(data.DNS)
+	blockItems := cloneStringSlice(data.Block)
+	outboundItems := cloneOutboundItems(data.Outbound)
+	protocolItems := cloneProtocolItems(data.Protocols)
+
+	sort.Strings(blockItems)
+	sort.SliceStable(protocolItems, func(i, j int) bool {
+		if protocolItems[i].Type != protocolItems[j].Type {
+			return protocolItems[i].Type < protocolItems[j].Type
+		}
+		if protocolItems[i].Port != protocolItems[j].Port {
+			return protocolItems[i].Port < protocolItems[j].Port
+		}
+		if protocolItems[i].Transport != protocolItems[j].Transport {
+			return protocolItems[i].Transport < protocolItems[j].Transport
+		}
+		return protocolItems[i].Security < protocolItems[j].Security
+	})
+
+	return semanticServerConfigData{
+		TrafficReportThreshold: data.TrafficReportThreshold,
+		PushInterval:           data.PushInterval,
+		PullInterval:           data.PullInterval,
+		IPStrategy:             data.IPStrategy,
+		DNS:                    dnsItems,
+		Block:                  blockItems,
+		Outbound:               outboundItems,
+		Protocols:              protocolItems,
+		Total:                  data.Total,
+	}
+}
+
+func cloneStringSlice(items *[]string) []string {
+	if items == nil {
+		return []string{}
+	}
+	clone := make([]string, len(*items))
+	copy(clone, *items)
+	return clone
+}
+
+func cloneDNSItems(items *[]DNSItem) []DNSItem {
+	if items == nil {
+		return []DNSItem{}
+	}
+	clone := make([]DNSItem, len(*items))
+	for i, item := range *items {
+		clone[i] = item
+		clone[i].Domains = make([]string, len(item.Domains))
+		copy(clone[i].Domains, item.Domains)
+		sort.Strings(clone[i].Domains)
+	}
+	return clone
+}
+
+func cloneOutboundItems(items *[]Outbound) []Outbound {
+	if items == nil {
+		return []Outbound{}
+	}
+	clone := make([]Outbound, len(*items))
+	for i, item := range *items {
+		clone[i] = item
+		clone[i].Rules = make([]string, len(item.Rules))
+		copy(clone[i].Rules, item.Rules)
+		sort.Strings(clone[i].Rules)
+	}
+	return clone
+}
+
+func cloneProtocolItems(items *[]Protocol) []Protocol {
+	if items == nil {
+		return []Protocol{}
+	}
+	clone := make([]Protocol, len(*items))
+	copy(clone, *items)
+	return clone
 }
