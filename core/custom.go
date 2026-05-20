@@ -42,6 +42,46 @@ func hasOutboundWithTag(list []*core.OutboundHandlerConfig, tag string) bool {
 	return false
 }
 
+func buildRouteDomains(rules []string) []string {
+	domains := make([]string, 0, len(rules))
+	seen := make(map[string]struct{}, len(rules))
+	for _, rule := range rules {
+		rule = strings.TrimSpace(rule)
+		if rule == "" {
+			continue
+		}
+
+		value := ""
+		data := strings.SplitN(rule, ":", 2)
+		if len(data) == 2 {
+			data[0] = strings.TrimSpace(data[0])
+			data[1] = strings.TrimSpace(data[1])
+			if data[1] == "" {
+				continue
+			}
+			switch data[0] {
+			case "keyword":
+				value = data[1]
+			case "suffix":
+				value = "domain:" + data[1]
+			case "regex":
+				value = "regexp:" + data[1]
+			default:
+				value = data[1]
+			}
+		} else {
+			value = "full:" + rule
+		}
+
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		domains = append(domains, value)
+	}
+	return domains
+}
+
 func GetCustomConfig(serverconfig *panel.ServerConfigResponse) (*dns.Config, []*core.OutboundHandlerConfig, *router.Config, error) {
 	var ip_strategy string
 	if serverconfig.Data.IPStrategy != "" {
@@ -146,31 +186,16 @@ func GetCustomConfig(serverconfig *panel.ServerConfigResponse) (*dns.Config, []*
 
 	//custom block
 	if blockList != nil {
-		var domains []string
-		for _, bitem := range *blockList {
-			data := strings.Split(bitem, ":")
-			if len(data) == 2 {
-				switch data[0] {
-				case "keyword":
-					domains = append(domains, data[1])
-				case "suffix":
-					domains = append(domains, "domain:"+data[1])
-				case "regex":
-					domains = append(domains, "regexp:"+data[1])
-				default:
-					domains = append(domains, data[1])
-				}
-			} else {
-				domains = append(domains, "full:"+bitem)
+		domains := buildRouteDomains(*blockList)
+		if len(domains) > 0 {
+			rule := map[string]interface{}{
+				"domain":      domains,
+				"outboundTag": "block",
 			}
-		}
-		rule := map[string]interface{}{
-			"domain":      domains,
-			"outboundTag": "block",
-		}
-		rawRule, err := json.Marshal(rule)
-		if err == nil {
-			coreRouterConfig.RuleList = append(coreRouterConfig.RuleList, rawRule)
+			rawRule, err := json.Marshal(rule)
+			if err == nil {
+				coreRouterConfig.RuleList = append(coreRouterConfig.RuleList, rawRule)
+			}
 		}
 	}
 
@@ -237,35 +262,20 @@ func GetCustomConfig(serverconfig *panel.ServerConfigResponse) (*dns.Config, []*
 				StreamSetting: streamSettings,
 			}
 			// Outbound rules
-			var domains []string
-			for _, item := range outbounditem.Rules {
-				data := strings.Split(item, ":")
-				if len(data) == 2 {
-					switch data[0] {
-					case "keyword":
-						domains = append(domains, data[1])
-					case "suffix":
-						domains = append(domains, "domain:"+data[1])
-					case "regex":
-						domains = append(domains, "regexp:"+data[1])
-					default:
-						domains = append(domains, data[1])
-					}
-				} else {
-					domains = append(domains, "full:"+item)
-				}
-			}
+			domains := buildRouteDomains(outbounditem.Rules)
 			custom_outbound, err := outbound.Build()
 			if err != nil {
 				continue
 			}
-			rule := map[string]interface{}{
-				"domain":      domains,
-				"outboundTag": custom_outbound.Tag,
-			}
-			rawRule, err := json.Marshal(rule)
-			if err == nil {
-				coreRouterConfig.RuleList = append(coreRouterConfig.RuleList, rawRule)
+			if len(domains) > 0 {
+				rule := map[string]interface{}{
+					"domain":      domains,
+					"outboundTag": custom_outbound.Tag,
+				}
+				rawRule, err := json.Marshal(rule)
+				if err == nil {
+					coreRouterConfig.RuleList = append(coreRouterConfig.RuleList, rawRule)
+				}
 			}
 			if hasOutboundWithTag(coreOutboundConfig, custom_outbound.Tag) {
 				continue
