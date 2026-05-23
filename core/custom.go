@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"strings"
 
@@ -40,6 +41,254 @@ func hasOutboundWithTag(list []*core.OutboundHandlerConfig, tag string) bool {
 		}
 	}
 	return false
+}
+
+func buildRouteDomains(rules []string) []string {
+	domains := make([]string, 0, len(rules))
+	seen := make(map[string]struct{}, len(rules))
+	for _, rule := range rules {
+		rule = strings.TrimSpace(rule)
+		if rule == "" {
+			continue
+		}
+
+		value := ""
+		data := strings.SplitN(rule, ":", 2)
+		if len(data) == 2 {
+			data[0] = strings.TrimSpace(data[0])
+			data[1] = strings.TrimSpace(data[1])
+			if data[1] == "" {
+				continue
+			}
+			switch data[0] {
+			case "keyword":
+				value = data[1]
+			case "suffix":
+				value = "domain:" + data[1]
+			case "regex":
+				value = "regexp:" + data[1]
+			default:
+				value = data[1]
+			}
+		} else {
+			value = "full:" + rule
+		}
+
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		domains = append(domains, value)
+	}
+	return domains
+}
+
+func normalizeOutboundProtocol(protocol string) string {
+	switch strings.ToLower(strings.TrimSpace(protocol)) {
+	case "direct":
+		return "freedom"
+	case "reject", "block":
+		return "blackhole"
+	default:
+		return strings.ToLower(strings.TrimSpace(protocol))
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func rawJSONMessage(value string, field string) (*json.RawMessage, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	if !json.Valid([]byte(value)) {
+		return nil, fmt.Errorf("invalid outbound %s json", field)
+	}
+	raw := json.RawMessage(value)
+	return &raw, nil
+}
+
+func buildOutboundSettings(item panel.Outbound) (string, *json.RawMessage, error) {
+	protocol := normalizeOutboundProtocol(item.Protocol)
+	if raw, err := rawJSONMessage(item.Settings, "settings"); err != nil || raw != nil {
+		return protocol, raw, err
+	}
+
+	settings := map[string]interface{}{}
+	switch protocol {
+	case "freedom", "blackhole":
+	case "http", "socks":
+		settings["address"] = strings.TrimSpace(item.Address)
+		settings["port"] = item.Port
+		if strings.TrimSpace(item.User) != "" {
+			settings["user"] = strings.TrimSpace(item.User)
+			settings["pass"] = item.Password
+		}
+	case "shadowsocks":
+		settings["address"] = strings.TrimSpace(item.Address)
+		settings["port"] = item.Port
+		settings["method"] = firstNonEmpty(item.Cipher, "chacha20-ietf-poly1305")
+		settings["password"] = item.Password
+		settings["uot"] = true
+		if item.UoT {
+			settings["uot"] = item.UoT
+		}
+		uotVersion := item.UoTVersion
+		if uotVersion == 0 {
+			uotVersion = 2
+		}
+		settings["uotVersion"] = uotVersion
+	case "trojan":
+		settings["address"] = strings.TrimSpace(item.Address)
+		settings["port"] = item.Port
+		settings["password"] = item.Password
+	case "vmess":
+		settings["address"] = strings.TrimSpace(item.Address)
+		settings["port"] = item.Port
+		settings["id"] = firstNonEmpty(item.UUID, item.Password)
+		settings["security"] = firstNonEmpty(item.Cipher, "auto")
+	case "vless":
+		settings["address"] = strings.TrimSpace(item.Address)
+		settings["port"] = item.Port
+		settings["id"] = firstNonEmpty(item.UUID, item.Password)
+		settings["encryption"] = "none"
+		if flow := strings.TrimSpace(item.Flow); flow != "" && flow != "none" {
+			settings["flow"] = flow
+		}
+	case "anytls":
+		settings["address"] = strings.TrimSpace(item.Address)
+		settings["port"] = item.Port
+		settings["password"] = item.Password
+	case "tuic":
+		settings["address"] = strings.TrimSpace(item.Address)
+		settings["port"] = item.Port
+		settings["uuid"] = firstNonEmpty(item.UUID, item.Password)
+		settings["password"] = item.Password
+		if congestion := strings.TrimSpace(item.CongestionController); congestion != "" {
+			settings["congestionControl"] = congestion
+		}
+		settings["udpStream"] = item.UDPStream
+		settings["zeroRttHandshake"] = item.ReduceRTT
+		if item.Heartbeat > 0 {
+			settings["heartbeat"] = item.Heartbeat
+		}
+	case "hysteria":
+		settings["version"] = 2
+		settings["address"] = strings.TrimSpace(item.Address)
+		settings["port"] = item.Port
+	case "wireguard":
+		return "", nil, nil
+	default:
+		return "", nil, nil
+	}
+
+	data, err := json.Marshal(settings)
+	if err != nil {
+		return "", nil, err
+	}
+	raw := json.RawMessage(data)
+	return protocol, &raw, nil
+}
+
+func buildOutboundStreamConfig(item panel.Outbound) (*coreConf.StreamConfig, error) {
+	if raw := strings.TrimSpace(item.StreamSettings); raw != "" {
+		var stream coreConf.StreamConfig
+		if err := json.Unmarshal([]byte(raw), &stream); err != nil {
+			return nil, fmt.Errorf("invalid outbound stream_settings json: %w", err)
+		}
+		return &stream, nil
+	}
+
+	protocol := normalizeOutboundProtocol(item.Protocol)
+	transport := strings.ToLower(strings.TrimSpace(item.Transport))
+	if transport == "" {
+		switch protocol {
+		case "vmess", "vless", "trojan", "anytls":
+			transport = "tcp"
+		case "tuic":
+			transport = "tuic"
+		case "hysteria":
+			transport = "hysteria"
+		}
+	}
+	security := strings.ToLower(strings.TrimSpace(item.Security))
+	hasStreamField := transport != "" ||
+		security != "" ||
+		strings.TrimSpace(item.SNI) != "" ||
+		strings.TrimSpace(item.Fingerprint) != "" ||
+		strings.TrimSpace(item.Host) != "" ||
+		strings.TrimSpace(item.Path) != "" ||
+		strings.TrimSpace(item.ServiceName) != "" ||
+		strings.TrimSpace(item.RealityPublicKey) != "" ||
+		strings.TrimSpace(item.RealityShortID) != ""
+	if !hasStreamField {
+		return nil, nil
+	}
+
+	stream := &coreConf.StreamConfig{Security: security}
+	if transport != "" {
+		t := coreConf.TransportProtocol(transport)
+		stream.Network = &t
+	}
+	switch security {
+	case "", "none":
+	case "tls":
+		stream.TLSSettings = &coreConf.TLSConfig{
+			ServerName:    strings.TrimSpace(item.SNI),
+			AllowInsecure: item.AllowInsecure,
+			Fingerprint:   firstNonEmpty(item.Fingerprint, "chrome"),
+		}
+	case "reality":
+		stream.REALITYSettings = &coreConf.REALITYConfig{
+			ServerName:  strings.TrimSpace(item.SNI),
+			PublicKey:   strings.TrimSpace(item.RealityPublicKey),
+			ShortId:     strings.TrimSpace(item.RealityShortID),
+			Fingerprint: firstNonEmpty(item.Fingerprint, "chrome"),
+			SpiderX:     firstNonEmpty(item.SpiderX, "/"),
+		}
+	default:
+		return nil, fmt.Errorf("unsupported outbound security %q", item.Security)
+	}
+
+	switch transport {
+	case "", "tcp", "raw":
+		if transport != "" {
+			stream.TCPSettings = &coreConf.TCPConfig{}
+		}
+	case "ws", "websocket":
+		stream.WSSettings = &coreConf.WebSocketConfig{
+			Host: strings.TrimSpace(item.Host),
+			Path: strings.TrimSpace(item.Path),
+		}
+	case "grpc":
+		stream.GRPCSettings = &coreConf.GRPCConfig{
+			Authority:   strings.TrimSpace(item.Host),
+			ServiceName: strings.TrimSpace(item.ServiceName),
+		}
+	case "httpupgrade":
+		stream.HTTPUPGRADESettings = &coreConf.HttpUpgradeConfig{
+			Host: strings.TrimSpace(item.Host),
+			Path: strings.TrimSpace(item.Path),
+		}
+	case "splithttp", "xhttp":
+		stream.SplitHTTPSettings = &coreConf.SplitHTTPConfig{
+			Host: strings.TrimSpace(item.Host),
+			Path: strings.TrimSpace(item.Path),
+		}
+	case "tuic", "hysteria":
+	default:
+		return nil, fmt.Errorf("unsupported outbound transport %q", item.Transport)
+	}
+
+	return stream, nil
 }
 
 func GetCustomConfig(serverconfig *panel.ServerConfigResponse) (*dns.Config, []*core.OutboundHandlerConfig, *router.Config, error) {
@@ -146,126 +395,54 @@ func GetCustomConfig(serverconfig *panel.ServerConfigResponse) (*dns.Config, []*
 
 	//custom block
 	if blockList != nil {
-		var domains []string
-		for _, bitem := range *blockList {
-			data := strings.Split(bitem, ":")
-			if len(data) == 2 {
-				switch data[0] {
-				case "keyword":
-					domains = append(domains, data[1])
-				case "suffix":
-					domains = append(domains, "domain:"+data[1])
-				case "regex":
-					domains = append(domains, "regexp:"+data[1])
-				default:
-					domains = append(domains, data[1])
-				}
-			} else {
-				domains = append(domains, "full:"+bitem)
+		domains := buildRouteDomains(*blockList)
+		if len(domains) > 0 {
+			rule := map[string]interface{}{
+				"domain":      domains,
+				"outboundTag": "block",
 			}
-		}
-		rule := map[string]interface{}{
-			"domain":      domains,
-			"outboundTag": "block",
-		}
-		rawRule, err := json.Marshal(rule)
-		if err == nil {
-			coreRouterConfig.RuleList = append(coreRouterConfig.RuleList, rawRule)
+			rawRule, err := json.Marshal(rule)
+			if err == nil {
+				coreRouterConfig.RuleList = append(coreRouterConfig.RuleList, rawRule)
+			}
 		}
 	}
 
 	//custom outbound
 	if outboundList != nil {
 		for _, outbounditem := range *outboundList {
-			jsonsettings := map[string]interface{}{
-				"address": outbounditem.Address,
-				"port":    outbounditem.Port,
+			protocol, rawSettings, err := buildOutboundSettings(outbounditem)
+			if err != nil {
+				return nil, nil, nil, err
 			}
-			streamSettings := &coreConf.StreamConfig{}
-			switch outbounditem.Protocol {
-			case "http":
-				//jsonsettings["user"] = outbounditem.User
-				jsonsettings["pass"] = outbounditem.Password
-			case "socks":
-				//jsonsettings["user"] = outbounditem.User
-				jsonsettings["pass"] = outbounditem.Password
-			case "shadowsocks":
-				//jsonsettings["method"] = outbounditem.Method
-				jsonsettings["password"] = outbounditem.Password
-				jsonsettings["uot"] = true
-				jsonsettings["UoTVersion"] = 2
-			case "trojan":
-				jsonsettings["password"] = outbounditem.Password
-				proto := coreConf.TransportProtocol("tcp")
-				streamSettings.Network = &proto
-				streamSettings.Security = "tls"
-				streamSettings.TLSSettings = &coreConf.TLSConfig{
-					//ServerName: outbounditem.SNI,
-					//Insecure: outbounditem.Insecure,
-				}
-			case "vmess":
-				jsonsettings["uuid"] = outbounditem.Password
-				proto := coreConf.TransportProtocol("tcp")
-				streamSettings.Network = &proto
-				/*if outbounditem.Security != "" && outbounditem.Security == "tls" {
-					streamSettings.Security = "tls"
-					streamSettings.TLSSettings = &coreConf.TLSConfig{
-						ServerName: outbounditem.SNI,
-						Insecure: outbounditem.Insecure,
-				}*/
-			case "vless":
-				jsonsettings["uuid"] = outbounditem.Password
-				proto := coreConf.TransportProtocol("tcp")
-				streamSettings.Network = &proto
-				/*if outbounditem.Security != "" && outbounditem.Security == "tls" {
-					streamSettings.Security = "tls"
-					streamSettings.TLSSettings = &coreConf.TLSConfig{
-						ServerName: outbounditem.SNI,
-						Insecure: outbounditem.Insecure,
-				}*/
-			//case "wireguard":
-			default:
+			if protocol == "" || rawSettings == nil {
 				continue
 			}
-
-			settings, _ := json.Marshal(jsonsettings)
-			rawSettings := json.RawMessage(settings)
+			streamSettings, err := buildOutboundStreamConfig(outbounditem)
+			if err != nil {
+				return nil, nil, nil, err
+			}
 			outbound := &coreConf.OutboundDetourConfig{
 				Tag:           outbounditem.Name,
-				Protocol:      outbounditem.Protocol,
-				Settings:      &rawSettings,
+				Protocol:      protocol,
+				Settings:      rawSettings,
 				StreamSetting: streamSettings,
 			}
 			// Outbound rules
-			var domains []string
-			for _, item := range outbounditem.Rules {
-				data := strings.Split(item, ":")
-				if len(data) == 2 {
-					switch data[0] {
-					case "keyword":
-						domains = append(domains, data[1])
-					case "suffix":
-						domains = append(domains, "domain:"+data[1])
-					case "regex":
-						domains = append(domains, "regexp:"+data[1])
-					default:
-						domains = append(domains, data[1])
-					}
-				} else {
-					domains = append(domains, "full:"+item)
-				}
-			}
+			domains := buildRouteDomains(outbounditem.Rules)
 			custom_outbound, err := outbound.Build()
 			if err != nil {
 				continue
 			}
-			rule := map[string]interface{}{
-				"domain":      domains,
-				"outboundTag": custom_outbound.Tag,
-			}
-			rawRule, err := json.Marshal(rule)
-			if err == nil {
-				coreRouterConfig.RuleList = append(coreRouterConfig.RuleList, rawRule)
+			if len(domains) > 0 {
+				rule := map[string]interface{}{
+					"domain":      domains,
+					"outboundTag": custom_outbound.Tag,
+				}
+				rawRule, err := json.Marshal(rule)
+				if err == nil {
+					coreRouterConfig.RuleList = append(coreRouterConfig.RuleList, rawRule)
+				}
 			}
 			if hasOutboundWithTag(coreOutboundConfig, custom_outbound.Tag) {
 				continue
