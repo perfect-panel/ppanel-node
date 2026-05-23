@@ -192,10 +192,10 @@ func buildVLess(nodeInfo *panel.NodeInfo, inbound *coreConf.InboundDetourConfig)
 		}
 	case "splithttp", "xhttp":
 		inbound.StreamSetting.SplitHTTPSettings = &coreConf.SplitHTTPConfig{
-			Host: nodeInfo.Protocol.Host,
-			Path: nodeInfo.Protocol.Path,
-			Mode: nodeInfo.Protocol.XHTTPMode,
-			//Extra: json.RawMessage(nodeInfo.Protocol.XHTTPExtra),
+			Host:  nodeInfo.Protocol.Host,
+			Path:  nodeInfo.Protocol.Path,
+			Mode:  nodeInfo.Protocol.XHTTPMode,
+			Extra: json.RawMessage(nodeInfo.Protocol.XHTTPExtra),
 		}
 	default:
 		return errors.New("the network type is not vail")
