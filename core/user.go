@@ -83,7 +83,7 @@ func (vc *XrayCore) GetUserTrafficSlice(tag string, mintraffic int) ([]panel.Use
 			traffic := value.(*counter.TrafficStorage)
 			up := traffic.UpCounter.Load()
 			down := traffic.DownCounter.Load()
-			if up+down > int64(mintraffic*1000) {
+			if up+down > int64(mintraffic) {
 				traffic.UpCounter.Store(0)
 				traffic.DownCounter.Store(0)
 				if vc.users.uidMap[email] == 0 {
