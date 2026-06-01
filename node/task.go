@@ -75,7 +75,6 @@ func (c *Controller) reloadTask() {
 	c.startTasks(c.info)
 }
 
-
 func (c *Controller) userListMonitor(ctx context.Context) (err error) {
 	// get user info
 	newU, err := c.apiClient.GetUserList(ctx)
@@ -195,23 +194,26 @@ func (c *Controller) reportUserTrafficTask(ctx context.Context) (err error) {
 		}
 	}
 
-	CPU, Mem, Disk, Uptime, err := serverstatus.GetSystemInfo()
-	if err != nil {
-		log.Print(err)
-	}
-	err = c.apiClient.ReportNodeStatus(
-		&panel.NodeStatus{
-			CPU:    CPU,
-			Mem:    Mem,
-			Disk:   Disk,
-			Uptime: Uptime,
-		})
-	if err != nil {
+	if err = c.reportNodeStatus(ctx); err != nil {
 		log.Print(err)
 	}
 
 	userTraffic = nil
 	return nil
+}
+
+func (c *Controller) reportNodeStatus(_ context.Context) error {
+	CPU, Mem, Disk, Uptime, err := serverstatus.GetSystemInfo()
+	if err != nil {
+		return err
+	}
+	return c.apiClient.ReportNodeStatus(&panel.NodeStatus{
+		CPU:                   CPU,
+		Mem:                   Mem,
+		Disk:                  Disk,
+		Uptime:                Uptime,
+		CertFingerprintSha256: c.certFingerprintSha256,
+	})
 }
 
 func compareUserList(old, new []panel.UserInfo) (deleted, added []panel.UserInfo) {
@@ -236,4 +238,3 @@ func compareUserList(old, new []panel.UserInfo) (deleted, added []panel.UserInfo
 
 	return deleted, added
 }
-

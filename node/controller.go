@@ -19,6 +19,7 @@ type Controller struct {
 	limiter                 *limiter.Limiter
 	userList                []panel.UserInfo
 	aliveMap                map[int]int
+	certFingerprintSha256   string
 	info                    *panel.NodeInfo
 	userListMonitorPeriodic *task.Task
 	userReportPeriodic      *task.Task
@@ -78,6 +79,9 @@ func (c *Controller) Start() error {
 	}
 	log.WithField("节点", c.tag).Infof("已添加 %d 个新用户", added)
 	c.startTasks(c.info)
+	if err = c.reportNodeStatus(context.Background()); err != nil {
+		log.WithField("节点", c.tag).Info("Report node status failed: ", err)
+	}
 	return nil
 }
 

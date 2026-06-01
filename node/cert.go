@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -39,7 +41,7 @@ func (c *Controller) requestCert() error {
 	case "none", "", "file":
 	case "dns", "http":
 		if file.IsExist(certFile) && file.IsExist(keyFile) {
-			return nil
+			break
 		}
 		l, err := NewLego(c.info)
 		if err != nil {
@@ -51,7 +53,13 @@ func (c *Controller) requestCert() error {
 		}
 	case "self":
 		if file.IsExist(certFile) && file.IsExist(keyFile) {
-			return nil
+			matched, err := selfCertificateMatchesDomain(certFile, c.info.Protocol.SNI)
+			if err == nil && matched {
+				break
+			}
+			if err != nil {
+				log.WithField("节点", c.tag).Info("check self cert error: ", err)
+			}
 		}
 		err := generateSelfSslCertificate(
 			c.info.Protocol.SNI,
@@ -62,6 +70,14 @@ func (c *Controller) requestCert() error {
 		}
 	default:
 		return fmt.Errorf("unsupported certmode: %s", c.info.Protocol.CertMode)
+	}
+	if c.info.Protocol.CertMode != "" && c.info.Protocol.CertMode != "none" && file.IsExist(certFile) {
+		fingerprint, err := certFingerprintSHA256(certFile)
+		if err != nil {
+			return fmt.Errorf("calculate cert fingerprint error: %s", err)
+		}
+		c.certFingerprintSha256 = fingerprint
+		c.info.Protocol.ReportedCertFingerprintSha256 = fingerprint
 	}
 	return nil
 }
@@ -85,27 +101,60 @@ func generateSelfSslCertificate(domain, certPath, keyPath string) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(certPath, os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		return err
-	}
-	err = pem.Encode(f, &pem.Block{
+	certPEM := pem.EncodeToMemory(&pem.Block{
 		Type:  "CERTIFICATE",
 		Bytes: cert,
 	})
-	if err != nil {
+	if certPEM == nil {
+		return fmt.Errorf("encode certificate pem failed")
+	}
+	if err := os.WriteFile(certPath, certPEM, 0644); err != nil {
 		return err
 	}
-	f, err = os.OpenFile(keyPath, os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		return err
-	}
-	err = pem.Encode(f, &pem.Block{
-		Type:  "EC PRIVATE KEY",
+	keyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
 		Bytes: x509.MarshalPKCS1PrivateKey(key),
 	})
-	if err != nil {
+	if keyPEM == nil {
+		return fmt.Errorf("encode private key pem failed")
+	}
+	if err := os.WriteFile(keyPath, keyPEM, 0644); err != nil {
 		return err
 	}
 	return nil
+}
+
+func certFingerprintSHA256(certPath string) (string, error) {
+	cert, err := readLeafCertificate(certPath)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(cert.Raw)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func selfCertificateMatchesDomain(certPath, domain string) (bool, error) {
+	if domain == "" {
+		return true, nil
+	}
+	cert, err := readLeafCertificate(certPath)
+	if err != nil {
+		return false, err
+	}
+	if cert.VerifyHostname(domain) == nil {
+		return true, nil
+	}
+	return cert.Subject.CommonName == domain, nil
+}
+
+func readLeafCertificate(certPath string) (*x509.Certificate, error) {
+	data, err := os.ReadFile(certPath)
+	if err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode(data)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, fmt.Errorf("certificate pem not found")
+	}
+	return x509.ParseCertificate(block.Bytes)
 }
