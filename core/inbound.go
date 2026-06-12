@@ -106,6 +106,13 @@ func buildInbound(nodeInfo *panel.NodeInfo, tag string) (*core.InboundHandlerCon
 					},
 				},
 			}
+			if nodeInfo.Type == "hysteria2" || nodeInfo.Type == "hysteria" {
+					alpn := coreConf.StringList{"h3"}
+					in.StreamSetting.TLSSettings.ALPN = &alpn
+					if nodeInfo.Protocol.SNI != "" {
+							in.StreamSetting.TLSSettings.ServerName = nodeInfo.Protocol.SNI
+					}
+			}
 		}
 	case "reality":
 		if in.StreamSetting == nil {
