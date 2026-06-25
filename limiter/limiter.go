@@ -134,33 +134,32 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool
 	} else {
 		return nil, true
 	}
-	if noSSUDP {
-		// Store online user for device limit
-		ipMap := new(sync.Map)
-		ipMap.Store(ip, uid)
-		aliveIp := l.AliveList[uid]
-		// If any device is online
-		if v, ok := l.UserOnlineIP.LoadOrStore(taguuid, ipMap); ok {
-			ipMap := v.(*sync.Map)
-			// If this is a new ip
-			if _, ok := ipMap.LoadOrStore(ip, uid); !ok {
-				if deviceLimit > 0 {
-					if deviceLimit <= aliveIp {
-						ipMap.Delete(ip)
-						return nil, true
-					}
-				}
-			}
-		} else if v, ok := l.OldUserOnline.Load(ip); ok {
-			if v.(int) == uid {
-				l.OldUserOnline.Delete(ip)
-			}
-		} else {
+
+	// Store online user for device limit
+	ipMap := new(sync.Map)
+	ipMap.Store(ip, uid)
+	aliveIp := l.AliveList[uid]
+	// If any device is online
+	if v, ok := l.UserOnlineIP.LoadOrStore(taguuid, ipMap); ok {
+		ipMap := v.(*sync.Map)
+		// If this is a new ip
+		if _, ok := ipMap.LoadOrStore(ip, uid); !ok {
 			if deviceLimit > 0 {
 				if deviceLimit <= aliveIp {
-					l.UserOnlineIP.Delete(taguuid)
+					ipMap.Delete(ip)
 					return nil, true
 				}
+			}
+		}
+	} else if v, ok := l.OldUserOnline.Load(ip); ok {
+		if v.(int) == uid {
+			l.OldUserOnline.Delete(ip)
+		}
+	} else {
+		if deviceLimit > 0 {
+			if deviceLimit <= aliveIp {
+				l.UserOnlineIP.Delete(taguuid)
+				return nil, true
 			}
 		}
 	}
