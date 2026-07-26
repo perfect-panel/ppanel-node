@@ -62,22 +62,7 @@ func Build(nodeInfo *panel.NodeInfo, tag string) (*core.InboundHandlerConfig, er
 	// configurations that select a certificate mode must therefore enable the
 	// same certificate path even when their generic Security field is omitted.
 	if shouldConfigureTLS(nodeInfo) {
-		if in.StreamSetting == nil {
-			in.StreamSetting = &coreConf.StreamConfig{}
-		}
-		in.StreamSetting.Security = "tls"
-		in.StreamSetting.TLSSettings = &coreConf.TLSConfig{
-			Certs: []*coreConf.TLSCertConfig{
-				{
-					CertFile: filepath.Join("/etc/PPanel-node/", nodeInfo.Type+strconv.Itoa(nodeInfo.Id)+".cer"),
-					KeyFile:  filepath.Join("/etc/PPanel-node/", nodeInfo.Type+strconv.Itoa(nodeInfo.Id)+".key"),
-				},
-			},
-		}
-		if nodeInfo.Type == "hysteria2" || nodeInfo.Type == "hysteria" {
-			alpn := coreConf.StringList{"h3"}
-			in.StreamSetting.TLSSettings.ALPN = &alpn
-		}
+		applyTLSSettings(nodeInfo, in)
 	}
 	if nodeInfo.Protocol.Security == "reality" {
 		if in.StreamSetting == nil {
@@ -126,6 +111,31 @@ func shouldConfigureTLS(nodeInfo *panel.NodeInfo) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func applyTLSSettings(nodeInfo *panel.NodeInfo, in *coreConf.InboundDetourConfig) {
+	if in.StreamSetting == nil {
+		in.StreamSetting = &coreConf.StreamConfig{}
+	}
+	in.StreamSetting.Security = "tls"
+	// Only TLS 1.3 is accepted; the post-quantum hybrid key exchange is
+	// preferred, with plain X25519 as the fallback for clients without
+	// X25519MLKEM768 support (Go < 1.24 cores, older mobile clients).
+	curvePreferences := coreConf.StringList{"X25519MLKEM768", "X25519"}
+	in.StreamSetting.TLSSettings = &coreConf.TLSConfig{
+		MinVersion:       "1.3",
+		CurvePreferences: &curvePreferences,
+		Certs: []*coreConf.TLSCertConfig{
+			{
+				CertFile: filepath.Join("/etc/PPanel-node/", nodeInfo.Type+strconv.Itoa(nodeInfo.Id)+".cer"),
+				KeyFile:  filepath.Join("/etc/PPanel-node/", nodeInfo.Type+strconv.Itoa(nodeInfo.Id)+".key"),
+			},
+		},
+	}
+	if nodeInfo.Type == "hysteria2" || nodeInfo.Type == "hysteria" {
+		alpn := coreConf.StringList{"h3"}
+		in.StreamSetting.TLSSettings.ALPN = &alpn
 	}
 }
 
