@@ -63,7 +63,9 @@ func (c *NodeClient) GetUserList(ctx context.Context) ([]UserInfo, error) {
 		body := r.Body()
 		return nil, fmt.Errorf("访问 %s 失败: %s", path.Join(c.APIHost+p), string(body))
 	}
-	userlist := &UserListBody{}
+	// A nil slice is reserved for HTTP 304, including when the panel revokes
+	// every user. Return a non-nil empty slice for a successful empty list.
+	userlist := &UserListBody{Users: make([]UserInfo, 0)}
 	dec := jsontext.NewDecoder(r.RawResponse.Body)
 	for {
 		tok, err := dec.ReadToken()

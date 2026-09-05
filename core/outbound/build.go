@@ -166,7 +166,7 @@ func Build(serverconfig *panel.ServerConfigResponse, hasIPv6 bool) (*BuildResult
 			domains := buildRouteDomains(outbounditem.Rules)
 			customOutbound, err := outbound.Build()
 			if err != nil {
-				continue
+				return nil, fmt.Errorf("build outbound %q (%s): %w", outbounditem.Name, protocol, err)
 			}
 			if len(domains) > 0 {
 				rule := map[string]interface{}{
@@ -255,6 +255,8 @@ func normalizeOutboundProtocol(protocol string) string {
 		return "freedom"
 	case "reject", "block":
 		return "blackhole"
+	case "hysteria2":
+		return "hysteria"
 	default:
 		return strings.ToLower(strings.TrimSpace(protocol))
 	}
@@ -336,7 +338,7 @@ func buildOutboundSettings(item panel.Outbound) (string, *json.RawMessage, error
 	case "tuic":
 		settings["address"] = strings.TrimSpace(item.Address)
 		settings["port"] = item.Port
-		settings["uuid"] = firstNonEmpty(item.UUID, item.Password)
+		settings["id"] = firstNonEmpty(item.UUID, item.Password)
 		settings["password"] = item.Password
 		if congestion := strings.TrimSpace(item.CongestionController); congestion != "" {
 			settings["congestionControl"] = congestion
@@ -449,7 +451,9 @@ func buildOutboundStreamConfig(item panel.Outbound) (*coreConf.StreamConfig, err
 			Host: strings.TrimSpace(item.Host),
 			Path: strings.TrimSpace(item.Path),
 		}
-	case "tuic", "hysteria":
+	case "hysteria":
+		stream.HysteriaSettings = &coreConf.HysteriaConfig{Version: 2, Auth: firstNonEmpty(item.Password, item.UUID)}
+	case "tuic":
 	default:
 		return nil, fmt.Errorf("unsupported outbound transport %q", item.Transport)
 	}

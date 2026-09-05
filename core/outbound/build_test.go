@@ -139,3 +139,32 @@ func TestBuildSkipsUnsupportedOutboundWithoutRawSettings(t *testing.T) {
 		t.Fatalf("route rules len = %d, want only default DNS rule", got)
 	}
 }
+
+func TestTUICOutboundUsesID(t *testing.T) {
+	item := panel.Outbound{Name: "tuic", Protocol: "tuic", Address: "example.com", Port: 443, UUID: "00000000-0000-0000-0000-000000000001", Password: "password"}
+	result, err := Build(&panel.ServerConfigResponse{Data: &panel.Data{Protocols: &[]panel.Protocol{}, Outbound: &[]panel.Outbound{item}}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Outbounds) != 4 {
+		t.Fatal("TUIC outbound was silently dropped")
+	}
+}
+
+func TestInvalidOutboundIsNotSilentlyDropped(t *testing.T) {
+	item := panel.Outbound{Name: "invalid-tls", Protocol: "vless", Address: "example.com", Port: 443, UUID: "00000000-0000-0000-0000-000000000001", Security: "tls", AllowInsecure: true}
+	_, err := Build(&panel.ServerConfigResponse{Data: &panel.Data{Protocols: &[]panel.Protocol{}, Outbound: &[]panel.Outbound{item}}}, false)
+	if err == nil {
+		t.Fatal("removed allowInsecure setting was silently accepted")
+	}
+}
+
+func TestHysteria2OutboundUsesTransportAuthentication(t *testing.T) {
+	stream, err := buildOutboundStreamConfig(panel.Outbound{Protocol: "hysteria2", UUID: "user-id", Password: "auth-token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stream.HysteriaSettings == nil || stream.HysteriaSettings.Version != 2 || stream.HysteriaSettings.Auth != "auth-token" {
+		t.Fatalf("Hysteria settings = %+v", stream.HysteriaSettings)
+	}
+}

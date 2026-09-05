@@ -48,6 +48,10 @@ func validateProtocol(protocol panel.Protocol) error {
 		if strings.TrimSpace(protocol.Cipher) == "" {
 			return fmt.Errorf("cipher is required")
 		}
+		switch strings.ToLower(strings.TrimSpace(protocol.Cipher)) {
+		case "none", "plain":
+			return fmt.Errorf("Shadowsocks cipher %q is no longer supported by Xray", protocol.Cipher)
+		}
 	case "tuic", "hysteria", "hysteria2":
 		if err := validateTLSConfig(protocol); err != nil {
 			return err

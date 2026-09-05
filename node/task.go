@@ -21,17 +21,8 @@ func (c *Controller) startTasks(node *panel.NodeInfo) {
 		Execute:  c.userListMonitor,
 		ReloadCh: c.server.ReloadCh,
 	}
-	// report user traffic task
-	c.userReportPeriodic = &task.Task{
-		Name:     "reportUserTraffic",
-		Interval: time.Duration(node.PushInterval) * time.Second,
-		Execute:  c.reportUserTrafficTask,
-		ReloadCh: c.server.ReloadCh,
-	}
 	_ = c.userListMonitorPeriodic.Start(false)
 	logx.Node(c.tag).Info("用户列表监控任务已启动")
-	_ = c.userReportPeriodic.Start(false)
-	logx.Node(c.tag).Info("用户流量报告任务已启动")
 	if usesTLSCertificate(node) {
 		switch node.Protocol.CertMode {
 		case "none", "", "file", "self":
@@ -65,15 +56,6 @@ func usesTLSCertificate(node *panel.NodeInfo) bool {
 	}
 }
 
-func (c *Controller) reloadTask() {
-	c.userListMonitorPeriodic.Close()
-	c.userReportPeriodic.Close()
-	if c.renewCertPeriodic != nil {
-		c.renewCertPeriodic.Close()
-	}
-	c.startTasks(c.info)
-}
-
 func (c *Controller) userListMonitor(ctx context.Context) (err error) {
 	// get user info
 	newU, err := c.apiClient.GetUserList(ctx)
@@ -98,6 +80,7 @@ func (c *Controller) userListMonitor(ctx context.Context) (err error) {
 	}
 	deleted, added := compareUserList(c.userList, newU)
 	if len(deleted) > 0 {
+		c.collectTraffic(0)
 		// have deleted users
 		err = c.server.DelUsers(deleted, c.tag, c.info)
 		if err != nil {
@@ -135,21 +118,7 @@ func (c *Controller) userListMonitor(ctx context.Context) (err error) {
 	return nil
 }
 
-func (c *Controller) reportUserTrafficTask(ctx context.Context) (err error) {
-	var reportmin = 0
-	if c.info.TrafficReportThreshold > 0 {
-		reportmin = c.info.TrafficReportThreshold
-	}
-	userTraffic, _ := c.server.GetUserTrafficSlice(c.tag, reportmin)
-	if len(userTraffic) > 0 {
-		err = c.apiClient.ReportUserTraffic(ctx, &userTraffic)
-		if err != nil {
-			logx.Node(c.tag).WithError(err).Error("上报用户流量失败")
-		} else {
-			logx.Node(c.tag).WithField("user_reported", len(userTraffic)).Info("已上报用户消耗流量")
-		}
-	}
-
+func (c *Controller) reportOnlineAndStatus(ctx context.Context, userTraffic []panel.UserTraffic) (err error) {
 	if onlineDevice, err := c.limiter.GetOnlineDevice(); err != nil {
 		logx.Node(c.tag).WithError(err).Error("获取在线设备失败")
 	} else if len(*onlineDevice) > 0 {
@@ -181,7 +150,7 @@ func (c *Controller) reportUserTrafficTask(ctx context.Context) (err error) {
 	if err != nil {
 		logx.Node(c.tag).WithError(err).Error("获取系统信息失败")
 	}
-	err = c.apiClient.ReportNodeStatus(
+	err = c.apiClient.ReportNodeStatusContext(ctx,
 		&panel.NodeStatus{
 			CPU:    CPU,
 			Mem:    Mem,

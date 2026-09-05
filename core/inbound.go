@@ -27,6 +27,13 @@ func (v *XrayCore) addInbound(config *core.InboundHandlerConfig) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := v.ihm.AddHandler(ctx, handler); err != nil {
+		// The manager registers the handler before Start. Remove this failed
+		// registration without removing a different handler on duplicate tags.
+		if current, lookupErr := v.ihm.GetHandler(ctx, handler.Tag()); lookupErr == nil && current == handler {
+			_ = v.ihm.RemoveHandler(ctx, handler.Tag())
+		} else {
+			_ = handler.Close()
+		}
 		return err
 	}
 	return nil

@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"runtime"
 	"syscall"
+	"time"
 
 	"github.com/perfect-panel/ppanel-node/api/panel"
 	"github.com/perfect-panel/ppanel-node/common/logx"
@@ -85,12 +86,20 @@ func serverHandle(_ *cobra.Command, _ []string) {
 		logx.Component("server").WithError(err).Error("启动Xray核心失败")
 		return
 	}
-	defer xraycore.Close()
+	defer func() { _ = xraycore.Close() }()
 	nodes, err := node.New(xraycore, c, serverconfig)
 	if err != nil {
 		logx.Component("server").WithError(err).Error("获取节点配置失败")
 		return
 	}
+	defer func() {
+		nodes.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := nodes.FlushTraffic(ctx); err != nil {
+			logx.Component("server").WithError(err).Error("退出前上报剩余流量失败")
+		}
+	}()
 	err = nodes.Start()
 	if err != nil {
 		logx.Component("server").WithError(err).Error("启动节点失败")
@@ -119,8 +128,6 @@ func serverHandle(_ *cobra.Command, _ []string) {
 	for {
 		select {
 		case <-osSignals:
-			nodes.Close()
-			_ = xraycore.Close()
 			return
 		case <-reloadCh:
 			logx.Component("server").Info("收到重载信号，正在重新加载配置")
@@ -169,28 +176,44 @@ func reload(config string, nodes **node.Node, xcore **core.XrayCore, logHandle *
 		return logHandle, err
 	}
 
-	oldNodes := *nodes
-	oldCore := *xcore
-	if oldNodes != nil {
-		oldNodes.Close()
-	}
-	if oldCore != nil {
-		if err := oldCore.Close(); err != nil {
-			logx.Component("server").WithError(err).Error("关闭旧Xray核心失败")
-		}
-	}
-	*nodes = nil
-	*xcore = nil
-
-	if err := newNodes.Start(); err != nil {
+	if err := newNodes.Prepare(); err != nil {
 		newNodes.Close()
 		_ = newCore.Close()
 		return logHandle, err
 	}
-	logx.Component("server").Info("新节点启动成功")
+
+	oldNodes := *nodes
+	oldCore := *xcore
+	newNodes.InheritTraffic(oldNodes)
+	restore := func(cause error) (*logx.Handle, error) {
+		newNodes.Close()
+		_ = newCore.Close()
+		if oldNodes != nil {
+			if err := oldNodes.Start(); err != nil {
+				return logHandle, fmt.Errorf("reload failed: %w; restoring previous nodes failed: %v", cause, err)
+			}
+		}
+		return logHandle, fmt.Errorf("reload failed, previous nodes restored: %w", cause)
+	}
+	// Keep the old core and the prepared node snapshots until the new listeners
+	// are bound. Rollback never fetches users or certificates from the panel.
+	if oldNodes != nil {
+		if err := oldNodes.Stop(); err != nil {
+			return restore(err)
+		}
+	}
+	if err := newNodes.Start(); err != nil {
+		return restore(err)
+	}
 
 	*nodes = newNodes
 	*xcore = newCore
+	if oldNodes != nil {
+		oldNodes.Close()
+	}
+	if oldCore != nil {
+		_ = oldCore.Close()
+	}
 	logx.Component("server").Info("实例切换成功")
 	newLogHandle := logHandle
 	if h, err := logx.Setup(logx.Config{

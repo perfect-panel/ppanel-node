@@ -1,6 +1,7 @@
 package panel
 
 import (
+	"context"
 	"fmt"
 	"path"
 	"time"
@@ -34,8 +35,12 @@ type NodeStatus struct {
 }
 
 func (c *NodeClient) ReportNodeStatus(nodeStatus *NodeStatus) (err error) {
+	return c.ReportNodeStatusContext(context.Background(), nodeStatus)
+}
+
+func (c *NodeClient) ReportNodeStatusContext(ctx context.Context, nodeStatus *NodeStatus) error {
 	if c.UseProtobuf {
-		return c.reportNodeStatusProtobuf(nodeStatus)
+		return c.reportNodeStatusProtobuf(ctx, nodeStatus)
 	}
 	p := "/v1/server/status"
 	status := ServerPushStatusRequest{
@@ -44,16 +49,16 @@ func (c *NodeClient) ReportNodeStatus(nodeStatus *NodeStatus) (err error) {
 		Disk:      nodeStatus.Disk,
 		UpdatedAt: time.Now().UnixMilli(),
 	}
-	r, err := c.Client.R().SetBody(status).ForceContentType("application/json").Post(p)
+	r, err := c.Client.R().SetContext(ctx).SetBody(status).ForceContentType("application/json").Post(p)
 	if err != nil {
 		return fmt.Errorf("访问 %s 失败: %v", path.Join(c.APIHost+p), err.Error())
 	}
 	return checkPanelResponse(r, path.Join(c.APIHost+p))
 }
 
-func (c *NodeClient) reportNodeStatusProtobuf(nodeStatus *NodeStatus) error {
+func (c *NodeClient) reportNodeStatusProtobuf(ctx context.Context, nodeStatus *NodeStatus) error {
 	const p = "/v1/server/status"
-	request := c.Client.R()
+	request := c.Client.R().SetContext(ctx)
 	if err := setProtobufRequestBody(request, &serverv1.PushServerStatusRequest{
 		Cpu:       nodeStatus.CPU,
 		Mem:       nodeStatus.Mem,

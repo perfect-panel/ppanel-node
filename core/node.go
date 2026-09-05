@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	xray "github.com/xtls/xray-core/core"
 
 	"github.com/perfect-panel/ppanel-node/api/panel"
 	inboundbuilder "github.com/perfect-panel/ppanel-node/core/inbound"
@@ -25,4 +26,8 @@ func (v *XrayCore) DelNode(tag string) error {
 		return fmt.Errorf("remove in error: %s", err)
 	}
 	return nil
+}
+
+func (v *XrayCore) AddNodeConfig(config *xray.InboundHandlerConfig) error {
+	return v.addInbound(config)
 }

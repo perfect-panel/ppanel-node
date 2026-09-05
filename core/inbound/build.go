@@ -9,7 +9,10 @@ import (
 	"strings"
 
 	"github.com/perfect-panel/ppanel-node/api/panel"
+	tuiccompat "github.com/perfect-panel/ppanel-node/core/transport/tuic"
+	"github.com/xtls/xray-core/app/proxyman"
 	"github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/common/serial"
 	"github.com/xtls/xray-core/core"
 	coreConf "github.com/xtls/xray-core/infra/conf"
 )
@@ -92,7 +95,20 @@ func Build(nodeInfo *panel.NodeInfo, tag string) (*core.InboundHandlerConfig, er
 		}
 	}
 	in.Tag = tag
-	return in.Build()
+	built, err := in.Build()
+	if err != nil {
+		return nil, err
+	}
+	if nodeInfo.Type == "tuic" {
+		value, err := built.ReceiverSettings.GetInstance()
+		if err != nil {
+			return nil, err
+		}
+		receiver := value.(*proxyman.ReceiverConfig)
+		receiver.StreamSettings.ProtocolName = tuiccompat.ProtocolName
+		built.ReceiverSettings = serial.ToTypedMessage(receiver)
+	}
+	return built, nil
 }
 
 func shouldConfigureTLS(nodeInfo *panel.NodeInfo) bool {

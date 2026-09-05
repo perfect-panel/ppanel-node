@@ -22,8 +22,18 @@ on:
     types: [published]
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.1'
+      - name: Test with race detector
+        run: GOEXPERIMENT=jsonv2 go test -race -timeout 5m ./...
 
   build:
+    needs: test
     strategy:
       matrix:
         # Include amd64 on all platforms.

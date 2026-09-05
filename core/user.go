@@ -84,8 +84,8 @@ func (vc *XrayCore) GetUserTrafficSlice(tag string, mintraffic int) ([]panel.Use
 			up := traffic.UpCounter.Load()
 			down := traffic.DownCounter.Load()
 			if up+down > int64(mintraffic) {
-				traffic.UpCounter.Store(0)
-				traffic.DownCounter.Store(0)
+				up = traffic.UpCounter.Swap(0)
+				down = traffic.DownCounter.Swap(0)
 				if vc.users.uidMap[email] == 0 {
 					c.Delete(email)
 					return true
@@ -260,8 +260,8 @@ func getCipherFromString(c string) shadowsocks.CipherType {
 		return shadowsocks.CipherType_AES_256_GCM
 	case "chacha20-poly1305", "aead_chacha20_poly1305", "chacha20-ietf-poly1305":
 		return shadowsocks.CipherType_CHACHA20_POLY1305
-	case "none", "plain":
-		return shadowsocks.CipherType_NONE
+	case "xchacha20-poly1305", "aead_xchacha20_poly1305", "xchacha20-ietf-poly1305":
+		return shadowsocks.CipherType_XCHACHA20_POLY1305
 	default:
 		return shadowsocks.CipherType_UNKNOWN
 	}

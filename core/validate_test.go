@@ -161,3 +161,12 @@ func TestValidateServerConfigSkipsUnsupportedProtocol(t *testing.T) {
 		t.Fatalf("ValidateServerConfig() error = %v, want unsupported protocol skipped", err)
 	}
 }
+
+func TestValidateServerConfigRejectsRemovedShadowsocksCipher(t *testing.T) {
+	for _, cipher := range []string{"none", "plain"} {
+		protocols := []panel.Protocol{{Type: "shadowsocks", Enable: true, Port: 443, Cipher: cipher}}
+		if err := ValidateServerConfig(&panel.ServerConfigResponse{Data: &panel.Data{Protocols: &protocols}}); err == nil {
+			t.Fatalf("accepted removed cipher %q", cipher)
+		}
+	}
+}

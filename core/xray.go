@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -63,8 +64,13 @@ func New(config *conf.Conf, client *panel.ServerClient) *XrayCore {
 func (v *XrayCore) Start(serverconfig *panel.ServerConfigResponse) error {
 	v.access.Lock()
 	defer v.access.Unlock()
-	v.Server = getCore(v.Config, serverconfig)
+	server, err := getCore(v.Config, serverconfig)
+	if err != nil {
+		return err
+	}
+	v.Server = server
 	if err := v.Server.Start(); err != nil {
+		_ = v.Server.Close()
 		return err
 	}
 	v.ihm = v.Server.GetFeature(inbound.ManagerType()).(inbound.Manager)
@@ -102,7 +108,7 @@ func (v *XrayCore) Close() error {
 	return nil
 }
 
-func getCore(c *conf.Conf, serverconfig *panel.ServerConfigResponse) *core.Instance {
+func getCore(c *conf.Conf, serverconfig *panel.ServerConfigResponse) (*core.Instance, error) {
 	// Log Config
 	coreLogConfig := &coreConf.LogConfig{
 		LogLevel:  c.LogConfig.Level,
@@ -112,7 +118,7 @@ func getCore(c *conf.Conf, serverconfig *panel.ServerConfigResponse) *core.Insta
 	// Custom config
 	dnsConfig, outBoundConfig, routeConfig, err := GetCustomConfig(serverconfig)
 	if err != nil {
-		logx.Component("xray").WithError(err).Panic("构建自定义配置失败")
+		return nil, fmt.Errorf("build custom configuration: %w", err)
 	}
 	// Inbound config
 	var inBoundConfig []*core.InboundHandlerConfig
@@ -127,10 +133,10 @@ func getCore(c *conf.Conf, serverconfig *panel.ServerConfigResponse) *core.Insta
 		// connections (interactive SSH, database sessions, MQTT/WebSocket, etc.).
 		// Restore it to 120 — the value used by upstream wyx2685/v2node, which
 		// this project is modified from.
-		ConnectionIdle:    proto.Uint32(120),
-		UplinkOnly:        proto.Uint32(2),
-		DownlinkOnly:      proto.Uint32(4),
-		BufferSize:        proto.Int32(64),
+		ConnectionIdle: proto.Uint32(120),
+		UplinkOnly:     proto.Uint32(2),
+		DownlinkOnly:   proto.Uint32(4),
+		BufferSize:     proto.Int32(64),
 	}
 	corePolicyConfig := &coreConf.PolicyConfig{}
 	corePolicyConfig.Levels = map[uint32]*coreConf.Policy{0: levelPolicyConfig}
@@ -152,9 +158,9 @@ func getCore(c *conf.Conf, serverconfig *panel.ServerConfigResponse) *core.Insta
 	}
 	server, err := core.New(config)
 	if err != nil {
-		logx.Component("xray").WithError(err).Panic("创建Xray实例失败")
+		return nil, fmt.Errorf("create Xray instance: %w", err)
 	}
-	return server
+	return server, nil
 }
 
 func (c *XrayCore) startTasks(serverconfig *panel.ServerConfigResponse) {
