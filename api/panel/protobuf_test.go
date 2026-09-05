@@ -34,7 +34,7 @@ func writeProtobuf(t *testing.T, writer http.ResponseWriter, message proto.Messa
 }
 
 func TestServerClientUsesProtobuf(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/v2/server/7" {
 			t.Fatalf("path = %q", request.URL.Path)
 		}
@@ -53,12 +53,13 @@ func TestServerClientUsesProtobuf(t *testing.T) {
 			},
 		})
 	}))
-	defer server.Close()
+	httpClient := server.Client()
 
 	client := NewServerClient(&conf.ServerApiConfig{
 		ApiHost: server.URL, ServerId: 7,
 	})
-	response, err := GetServerConfig(context.Background(), client)
+	client.Client.SetTransport(httpClient.Transport)
+	response, err := GetServerConfig(t.Context(), client)
 	if err != nil {
 		t.Fatalf("GetServerConfig() error = %v", err)
 	}
@@ -74,7 +75,7 @@ func TestServerClientUsesProtobuf(t *testing.T) {
 }
 
 func TestServerClientFallsBackToJSON(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if got := request.Header.Get("Accept"); got != protobufContentType {
 			t.Fatalf("Accept = %q, want Protobuf preference", got)
 		}
@@ -84,11 +85,11 @@ func TestServerClientFallsBackToJSON(t *testing.T) {
 			Data: &Data{Protocols: &[]Protocol{{Type: "vless", Port: 443, Enable: true, Transport: "tcp"}}},
 		})
 	}))
-	defer server.Close()
+	httpClient := server.Client()
 
-	response, err := GetServerConfig(context.Background(), NewServerClient(&conf.ServerApiConfig{
-		ApiHost: server.URL, ServerId: 7,
-	}))
+	client := NewServerClient(&conf.ServerApiConfig{ApiHost: server.URL, ServerId: 7})
+	client.Client.SetTransport(httpClient.Transport)
+	response, err := GetServerConfig(t.Context(), client)
 	if err != nil {
 		t.Fatalf("GetServerConfig() error = %v", err)
 	}
@@ -99,7 +100,7 @@ func TestServerClientFallsBackToJSON(t *testing.T) {
 
 func TestNodeClientUsesProtobuf(t *testing.T) {
 	const certificateSHA256 = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if got := request.Header.Get(CertificateSHA256Header); got != certificateSHA256 {
 			t.Fatalf("%s = %q, want %q", CertificateSHA256Header, got, certificateSHA256)
 		}
@@ -148,7 +149,7 @@ func TestNodeClientUsesProtobuf(t *testing.T) {
 			t.Fatalf("unexpected path %q", request.URL.Path)
 		}
 	}))
-	defer server.Close()
+	httpClient := server.Client()
 
 	client, err := NewNodeClient(&conf.NodeApiConfig{
 		APIHost: server.URL, NodeID: 7, NodeType: "vless", UseProtobuf: true,
@@ -156,6 +157,7 @@ func TestNodeClientUsesProtobuf(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewNodeClient() error = %v", err)
 	}
+	client.Client.SetTransport(httpClient.Transport)
 	client.SetCertificateSHA256(strings.ToUpper(certificateSHA256))
 	users, err := client.GetUserList(context.Background())
 	if err != nil || len(users) != 1 || users[0].Uuid != "user-1" {

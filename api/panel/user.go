@@ -2,11 +2,11 @@ package panel
 
 import (
 	"context"
-	"fmt"
-	"path"
-
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"fmt"
+	"io"
+	"path"
 
 	serverv1 "github.com/perfect-panel/ppanel-node/api/server/v1"
 	"google.golang.org/protobuf/proto"
@@ -63,10 +63,16 @@ func (c *NodeClient) GetUserList(ctx context.Context) ([]UserInfo, error) {
 		body := r.Body()
 		return nil, fmt.Errorf("访问 %s 失败: %s", path.Join(c.APIHost+p), string(body))
 	}
-	// A nil slice is reserved for HTTP 304, including when the panel revokes
-	// every user. Return a non-nil empty slice for a successful empty list.
-	userlist := &UserListBody{Users: make([]UserInfo, 0)}
-	dec := jsontext.NewDecoder(r.RawResponse.Body)
+	users, err := decodeUserList(r.RawResponse.Body)
+	if err != nil {
+		return nil, err
+	}
+	c.userEtag = r.Header().Get("ETag")
+	return users, nil
+}
+
+func decodeUserList(body io.Reader) ([]UserInfo, error) {
+	dec := jsontext.NewDecoder(body)
 	for {
 		tok, err := dec.ReadToken()
 		if err != nil {
@@ -76,26 +82,15 @@ func (c *NodeClient) GetUserList(ctx context.Context) ([]UserInfo, error) {
 			break
 		}
 	}
-	tok, err := dec.ReadToken()
-	if err != nil {
-		return nil, fmt.Errorf("解码用户列表失败: %w", err)
-	}
-	if tok.Kind() != '[' {
+	if dec.PeekKind() != '[' {
 		return nil, fmt.Errorf(`解码用户列表失败: "users"非数组`)
 	}
-	for dec.PeekKind() != ']' {
-		val, err := dec.ReadValue()
-		if err != nil {
-			return nil, fmt.Errorf("解码用户列表失败: 读取用户对象失败: %w", err)
-		}
-		var u UserInfo
-		if err := json.Unmarshal(val, &u); err != nil {
-			return nil, fmt.Errorf("解码用户列表失败: 读取用户对象失败: %w", err)
-		}
-		userlist.Users = append(userlist.Users, u)
+	// Nil is reserved for HTTP 304; an empty array must revoke all users.
+	users := make([]UserInfo, 0)
+	if err := json.UnmarshalDecode(dec, &users); err != nil {
+		return nil, fmt.Errorf("解码用户列表失败: %w", err)
 	}
-	c.userEtag = r.Header().Get("ETag")
-	return userlist.Users, nil
+	return users, nil
 }
 
 func (c *NodeClient) getUserListProtobuf(ctx context.Context) ([]UserInfo, error) {

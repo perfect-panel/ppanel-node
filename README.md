@@ -13,7 +13,7 @@ wget -N https://raw.githubusercontent.com/perfect-panel/PPanel-node/master/scrip
 
 ## 构建
 ``` bash
-GOEXPERIMENT=jsonv2 go build -v -o ./node -trimpath -ldflags "-s -w -buildid="
+go build -v -o ./output/ppnode -trimpath -ldflags "-s -w -buildid="
 ```
 
 ## Protobuf 面板接口
@@ -42,11 +42,17 @@ Protobuf 时，后续用户列表、在线用户、流量和状态上报都会�
 
 ## 开发验证
 
-项目使用 Go 1.26.1 和 `jsonv2` 实验。与 CI 相同的验证命令：
+项目使用 Go 1.27.1，JSON v2 已由标准库默认提供。与 CI 相同的验证命令：
 
 ```bash
-GOTOOLCHAIN=go1.26.1 GOEXPERIMENT=jsonv2 go test -race -timeout 5m ./...
-GOTOOLCHAIN=go1.26.1 GOEXPERIMENT=jsonv2 CGO_ENABLED=0 go build -o ./output/ppnode .
+GOTOOLCHAIN=go1.27.1 go test -race -timeout 5m ./...
+GOTOOLCHAIN=go1.27.1 CGO_ENABLED=0 go build -o ./output/ppnode .
+```
+
+用户列表流式 JSON 解码的性能基准：
+
+```bash
+GOTOOLCHAIN=go1.27.1 go test ./api/panel -run '^$' -bench BenchmarkDecodeUserList -benchmem
 ```
 
 ## 流量与重载

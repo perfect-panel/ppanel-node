@@ -17,15 +17,13 @@ func TestTrafficDrainPreservesConcurrentWrites(t *testing.T) {
 	storage := counts.GetCounter("user")
 	const writers, iterations = 8, 50000
 	var wg sync.WaitGroup
-	wg.Add(writers)
 	for range writers {
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range iterations {
 				storage.UpCounter.Add(1)
 				storage.DownCounter.Add(2)
 			}
-		}()
+		})
 	}
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()

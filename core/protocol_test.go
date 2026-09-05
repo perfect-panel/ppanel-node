@@ -63,20 +63,44 @@ func protocolCertificate(t *testing.T) *coreConf.TLSConfig {
 func protocolServer(t *testing.T, name string) (*XrayCore, int, *panel.NodeInfo, panel.UserInfo, string) {
 	t.Helper()
 	var port int
+	var reservations []io.Closer
+	releasePorts := func() {
+		for _, listener := range reservations {
+			_ = listener.Close()
+		}
+	}
+	defer releasePorts()
 	if name == "tuic" || name == "hysteria2" {
 		listener, err := net.ListenPacket("udp", "0.0.0.0:0")
 		if err != nil {
 			t.Fatal(err)
 		}
 		port = listener.LocalAddr().(*net.UDPAddr).Port
-		listener.Close()
+		reservations = append(reservations, listener)
 	} else {
-		listener, err := net.Listen("tcp", "0.0.0.0:0")
-		if err != nil {
-			t.Fatal(err)
+		for attempt := 0; attempt < 100; attempt++ {
+			listener, err := net.Listen("tcp", "0.0.0.0:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidate := listener.Addr().(*net.TCPAddr).Port
+			if name == "shadowsocks" {
+				// Shadowsocks binds TCP and UDP on the same port. A free TCP
+				// port alone may already be occupied by a UDP client socket.
+				udp, err := net.ListenPacket("udp", net.JoinHostPort("0.0.0.0", strconv.Itoa(candidate)))
+				if err != nil {
+					_ = listener.Close()
+					continue
+				}
+				reservations = append(reservations, udp)
+			}
+			reservations = append(reservations, listener)
+			port = candidate
+			break
 		}
-		port = listener.Addr().(*net.TCPAddr).Port
-		listener.Close()
+		if port == 0 {
+			t.Fatal("could not reserve a free TCP/UDP port pair")
+		}
 	}
 	cfg := conf.New()
 	cfg.LogConfig.Level = "error"
@@ -112,6 +136,7 @@ func protocolServer(t *testing.T, name string) (*XrayCore, int, *panel.NodeInfo,
 	}
 	user := panel.UserInfo{Id: 1, Uuid: protocolTestUUID}
 	c.LimiterManager.Add("protocol-test", []panel.UserInfo{user}, nil, name)
+	releasePorts()
 	if err := c.AddNodeConfig(inbound); err != nil {
 		t.Fatal(err)
 	}

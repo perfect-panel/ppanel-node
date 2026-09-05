@@ -45,8 +45,7 @@ func NewNodeClient(c *conf.NodeApiConfig) (*NodeClient, error) {
 		client.SetTimeout(30 * time.Second)
 	}
 	client.OnError(func(req *resty.Request, err error) {
-		var v *resty.ResponseError
-		if errors.As(err, &v) {
+		if v, ok := errors.AsType[*resty.ResponseError](err); ok {
 			logx.Component("panel").WithError(v.Err).Error("面板请求失败")
 		}
 	})
@@ -98,8 +97,7 @@ func NewServerClient(c *conf.ServerApiConfig) *ServerClient {
 		client.SetTimeout(30 * time.Second)
 	}
 	client.OnError(func(req *resty.Request, err error) {
-		var v *resty.ResponseError
-		if errors.As(err, &v) {
+		if v, ok := errors.AsType[*resty.ResponseError](err); ok {
 			logx.Component("panel").WithError(v.Err).Error("面板请求失败")
 		}
 	})

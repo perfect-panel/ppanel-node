@@ -108,21 +108,21 @@ func (l *Lego) SetProvider() error {
 
 func applyDNSEnvironment(raw string) (func(), error) {
 	env := make(map[string]string)
-	for _, line := range strings.Split(raw, "\n") {
+	for line := range strings.SplitSeq(raw, "\n") {
 		line = strings.TrimSuffix(line, "\r")
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
+		name, value, ok := strings.Cut(line, "=")
+		if !ok {
 			return nil, fmt.Errorf("invalid DNS environment line %q", line)
 		}
-		name := strings.TrimSpace(parts[0])
+		name = strings.TrimSpace(name)
 		if name == "" {
 			return nil, fmt.Errorf("DNS environment variable name is empty")
 		}
-		env[name] = parts[1]
+		env[name] = value
 	}
 
 	type previousValue struct {

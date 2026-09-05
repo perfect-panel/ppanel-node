@@ -163,12 +163,12 @@ func TestApplyDNSEnvironmentRestoresProcessEnvironment(t *testing.T) {
 	}()
 	_ = os.Unsetenv(createdName)
 
-	restore, err := applyDNSEnvironment(existingName + "=temporary\n" + createdName + "=created")
+	restore, err := applyDNSEnvironment("# DNS credentials\r\n\n" + existingName + "=temporary=token==\r\n" + createdName + "=created")
 	if err != nil {
 		t.Fatalf("applyDNSEnvironment() error = %v", err)
 	}
-	if got := os.Getenv(existingName); got != "temporary" {
-		t.Fatalf("temporary environment value = %q, want temporary", got)
+	if got := os.Getenv(existingName); got != "temporary=token==" {
+		t.Fatalf("temporary environment value = %q, want temporary=token==", got)
 	}
 	if got := os.Getenv(createdName); got != "created" {
 		t.Fatalf("created environment value = %q, want created", got)
