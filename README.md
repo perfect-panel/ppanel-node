@@ -49,6 +49,15 @@ GOTOOLCHAIN=go1.27.1 go test -race -timeout 5m ./...
 GOTOOLCHAIN=go1.27.1 CGO_ENABLED=0 go build -o ./output/ppnode .
 ```
 
+Android arm64 交叉构建需要额外的链接参数，供 `anet` 访问 Android 网络接口使用的 Go 内部符号：
+
+```bash
+GOTOOLCHAIN=go1.27.1 GOOS=android GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -checklinkname=0" -o ./output/ppnode-android .
+```
+
+如果 release 部分平台构建失败，可在 Actions 的 **Build and Release → Run workflow** 中填写
+已有的 `release_tag`。工作流会构建该标签对应的源码，只上传缺失的 ZIP 和校验文件，保留已有产物。
+
 用户列表流式 JSON 解码的性能基准：
 
 ```bash

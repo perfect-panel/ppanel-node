@@ -2,6 +2,11 @@ name: Build and Release
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to rebuild and upload missing assets
+        required: false
+        type: string
   push:
     branches:
       - master
@@ -26,6 +31,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.sha }}
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27.1'
@@ -34,6 +41,8 @@ jobs:
 
   build:
     needs: test
+    permissions:
+      contents: write
     strategy:
       matrix:
         # Include amd64 on all platforms.
@@ -106,9 +115,12 @@ jobs:
       GOARCH: ${{ matrix.goarch }}
       GOARM: ${{ matrix.goarm }}
       CGO_ENABLED: 0
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag || '' }}
     steps:
       - name: Checkout codebase
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.sha }}
       - name: Show workflow information
         id: get_filename
         run: |
@@ -123,19 +135,27 @@ jobs:
 
       - name: Get project dependencies
         run: go mod download
-      - name: Get release version
-        if: ${{ github.event_name == 'release' }}
+      - name: Set build version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "version=$(echo $GITHUB_REF | cut -d / -f 3)" >> $GITHUB_ENV
-      - name: Get other version
-        if: ${{ github.event_name != 'release' }}
-        run: |
-          echo "version=${{ github.sha }}" >> $GITHUB_ENV
+          if [[ -n "$RELEASE_TAG" ]]; then
+            git check-ref-format "refs/tags/$RELEASE_TAG"
+            gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" > /dev/null
+            printf 'version=%s\n' "$RELEASE_TAG" >> "$GITHUB_ENV"
+          else
+            printf 'version=%s\n' "$GITHUB_SHA" >> "$GITHUB_ENV"
+          fi
       - name: Build
         run: |
           echo "version: $version"
           mkdir -p build_assets
-          go build -v -o build_assets/ppnode -trimpath -ldflags "-X 'github.com/perfect-panel/ppanel-node/cmd.version=$version' -s -w -buildid="
+          build_ldflags="-X 'github.com/perfect-panel/ppanel-node/cmd.version=$version' -s -w -buildid="
+          if [[ "$GOOS" == "android" ]]; then
+            # anet uses net.zoneCache via go:linkname on Android (Go 1.23+).
+            build_ldflags+=" -checklinkname=0"
+          fi
+          go build -v -o build_assets/ppnode -trimpath -ldflags "$build_ldflags"
 
       - name: Build Mips softfloat
         if: matrix.goarch == 'mips' || matrix.goarch == 'mipsle'
@@ -182,10 +202,32 @@ jobs:
           path: |
             ./ppanel-node-${{ steps.get_filename.outputs.ASSET_NAME }}/*
       - name: Upload binaries to release
-        uses: svenstaro/upload-release-action@v2
-        if: github.event_name == 'release'
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: ./ppanel-node-${{ steps.get_filename.outputs.ASSET_NAME }}.zip*
-          tag: ${{ github.ref }}
-          file_glob: true
+        if: env.RELEASE_TAG != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '.assets[].name' > release-assets.txt
+          archive="ppanel-node-$ASSET_NAME.zip"
+          checksum="$archive.dgst"
+          if grep -Fxq -- "$archive" release-assets.txt; then
+            if grep -Fxq -- "$checksum" release-assets.txt; then
+              printf 'Keeping existing assets: %s and %s\n' "$archive" "$checksum"
+              exit 0
+            fi
+            # A checksum must describe the archive already published, which
+            # may differ from this rebuild (for example after geodata updates).
+            mkdir -p existing-release
+            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern "$archive" --dir existing-release
+            : > "$checksum"
+            for method in md5 sha1 sha256 sha512; do
+              openssl dgst "-$method" "existing-release/$archive" | sed 's/([^)]*)//g' >> "$checksum"
+            done
+          elif grep -Fxq -- "$checksum" release-assets.txt; then
+            printf 'Checksum exists without its archive: %s\n' "$checksum" >&2
+            exit 1
+          else
+            gh release upload "$RELEASE_TAG" "$archive" --repo "$GITHUB_REPOSITORY"
+          fi
+          gh release upload "$RELEASE_TAG" "$checksum" --repo "$GITHUB_REPOSITORY"
