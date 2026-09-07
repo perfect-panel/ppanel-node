@@ -91,6 +91,8 @@ func Build(nodeInfo *panel.NodeInfo, tag string) (*core.InboundHandlerConfig, er
 			ServerNames: []string{v.SNI},
 			PrivateKey:  v.RealityPrivateKey,
 			ShortIds:    []string{v.RealityShortID},
+			// Explicit zero preserves older clients; empty uses Xray's version floor.
+			MinClientVer: "0.0.0",
 			//Mldsa65Seed: v.RealityMldsa65Seed,
 		}
 	}

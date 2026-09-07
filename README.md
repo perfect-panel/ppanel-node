@@ -84,7 +84,8 @@ GOTOOLCHAIN=go1.27.1 go test ./api/panel -run '^$' -bench BenchmarkDecodeUserLis
   上游 TUIC 出站转发仍未实现，不能用于 TUIC 出站中继。
 - TUIC 传输模块包含项目内兼容修复，处理认证与首个请求并发时丢失请求的问题，
   详见 [兼容模块说明](core/transport/tuic/README.md)。
-- REALITY 默认最低客户端核心版本为 `26.3.27`，部署前需确认客户端兼容性。
+- 节点内部将 REALITY 的 `minClientVer` 固定为 `0.0.0`，覆盖内核默认的 `26.3.27`，
+  允许旧版本客户端通过最低版本检查；客户端仍需支持对应的协议和加密配置。
 - Shadowsocks 的 `none/plain` 和 TLS 的 `allowInsecure` 已被内核移除。
   自签名出站证书应在 `stream_settings` 的 `tlsSettings` 中设置
   `serverName` 与 `pinnedPeerCertSha256`，使用证书 DER 的 SHA-256 十六进制指纹。
