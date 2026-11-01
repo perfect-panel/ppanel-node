@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -19,6 +20,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,10 +37,13 @@ import (
 	"github.com/xtls/xray-core/features/outbound"
 	"github.com/xtls/xray-core/features/routing"
 	coreConf "github.com/xtls/xray-core/infra/conf"
+	"github.com/xtls/xray-core/transport/internet"
+	"github.com/xtls/xray-core/transport/internet/finalmask/salamander"
 	tuictransport "github.com/xtls/xray-core/transport/internet/tuic"
 )
 
 const protocolTestUUID = "00000000-0000-0000-0000-000000000001"
+const protocolTestMaskPassword = "ppnode-tuic-finalmask-test"
 
 func protocolCertificate(t *testing.T) *coreConf.TLSConfig {
 	t.Helper()
@@ -60,7 +65,7 @@ func protocolCertificate(t *testing.T) *coreConf.TLSConfig {
 	return &coreConf.TLSConfig{MinVersion: "1.3", Certs: []*coreConf.TLSCertConfig{{CertStr: strings.Split(string(certPEM), "\n"), KeyStr: strings.Split(string(keyPEM), "\n")}}}
 }
 
-func protocolServer(t *testing.T, name string) (*XrayCore, int, *panel.NodeInfo, panel.UserInfo, string) {
+func protocolServer(t *testing.T, name string, variant ...string) (*XrayCore, int, *panel.NodeInfo, panel.UserInfo, string) {
 	t.Helper()
 	var port int
 	var reservations []io.Closer
@@ -111,9 +116,16 @@ func protocolServer(t *testing.T, name string) (*XrayCore, int, *panel.NodeInfo,
 	t.Cleanup(func() { c.Close() })
 	allowLoopbackForTest(t, c)
 	info := &panel.NodeInfo{Id: 1, Type: name, Protocol: &panel.Protocol{Port: port, Transport: "tcp", Cipher: "aes-128-gcm", Encryption: "none"}}
+	if name == "shadowsocks" && len(variant) != 0 {
+		info.Protocol.Cipher = variant[0]
+		info.Protocol.ServerKey = protocolSS2022ServerKey(variant[0])
+	}
 	inbound, err := inboundbuilder.Build(info, "protocol-test")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if name == "shadowsocks" && len(variant) != 0 && info.Protocol.ServerKey != protocolSS2022ServerKey(variant[0]) {
+		t.Fatal("building the SS2022 inbound mutated its reusable server key")
 	}
 	var pin string
 	if name == "trojan" || name == "anytls" || name == "tuic" || name == "hysteria2" {
@@ -132,6 +144,11 @@ func protocolServer(t *testing.T, name string) (*XrayCore, int, *panel.NodeInfo,
 		}
 		receiver.StreamSettings.SecurityType = serial.GetMessageType(tlsSettings)
 		receiver.StreamSettings.SecuritySettings = []*serial.TypedMessage{serial.ToTypedMessage(tlsSettings)}
+		if name == "tuic" && len(variant) != 0 {
+			receiver.StreamSettings.Udpmasks = []*serial.TypedMessage{
+				serial.ToTypedMessage(&salamander.Config{Password: protocolTestMaskPassword}),
+			}
+		}
 		inbound.ReceiverSettings = serial.ToTypedMessage(receiver)
 	}
 	user := panel.UserInfo{Id: 1, Uuid: protocolTestUUID}
@@ -151,7 +168,7 @@ func protocolServer(t *testing.T, name string) (*XrayCore, int, *panel.NodeInfo,
 	return c, port, info, user, pin
 }
 
-func protocolClient(t *testing.T, name string, port int, pin string) *xray.Instance {
+func protocolClient(t *testing.T, name string, port int, pin string, ssCipher ...string) *xray.Instance {
 	t.Helper()
 	item := panel.Outbound{Name: "test-client", Protocol: name, Address: "127.0.0.1", Port: port, UUID: protocolTestUUID, Password: protocolTestUUID}
 	if name == "hysteria2" {
@@ -159,6 +176,12 @@ func protocolClient(t *testing.T, name string, port int, pin string) *xray.Insta
 	}
 	if name == "shadowsocks" {
 		item.Cipher = "aes-128-gcm"
+		if len(ssCipher) != 0 {
+			item.Cipher = ssCipher[0]
+			serverKey := protocolSS2022ServerKey(ssCipher[0])
+			item.Password = base64.StdEncoding.EncodeToString([]byte(serverKey)) + ":" +
+				base64.StdEncoding.EncodeToString([]byte(protocolTestUUID[:len(serverKey)]))
+		}
 	}
 	if name == "trojan" || name == "anytls" || name == "hysteria2" {
 		item.Security = "tls"
@@ -202,9 +225,11 @@ func protocolClient(t *testing.T, name string, port int, pin string) *xray.Insta
 }
 
 func TestUpgradedProtocolsRelayAndTrackUsers(t *testing.T) {
-	for _, name := range []string{"vless", "vmess", "shadowsocks", "trojan", "anytls", "hysteria2", "tuic"} {
-		t.Run(name, func(t *testing.T) {
-			server, port, info, user, pin := protocolServer(t, name)
+	for _, testName := range []string{"vless", "vmess", "shadowsocks", "shadowsocks/2022-blake3-aes-128-gcm", "shadowsocks/2022-blake3-aes-256-gcm", "trojan", "anytls", "hysteria2", "tuic", "tuic/salamander"} {
+		t.Run(testName, func(t *testing.T) {
+			parts := strings.Split(testName, "/")
+			name, variant := parts[0], parts[1:]
+			server, port, info, user, pin := protocolServer(t, name, variant...)
 			echo, err := net.Listen("tcp", "127.0.0.1:0")
 			if err != nil {
 				t.Fatal(err)
@@ -228,9 +253,9 @@ func TestUpgradedProtocolsRelayAndTrackUsers(t *testing.T) {
 			defer cancel()
 			var conn io.ReadWriteCloser
 			if name == "tuic" {
-				conn = dialTUIC(t, ctx, port, target)
+				conn = dialTUIC(t, ctx, port, target, len(variant) != 0)
 			} else {
-				stream, err := xray.Dial(ctx, protocolClient(t, name, port, pin), target)
+				stream, err := xray.Dial(ctx, protocolClient(t, name, port, pin, variant...), target)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -266,15 +291,51 @@ func TestUpgradedProtocolsRelayAndTrackUsers(t *testing.T) {
 	}
 }
 
+func protocolSS2022ServerKey(cipher string) string {
+	if cipher == "2022-blake3-aes-128-gcm" {
+		return strings.Repeat("s", 16)
+	}
+	return strings.Repeat("s", 32)
+}
+
 // The fork's TUIC outbound is not implemented. Exercise its new native inbound
 // with a minimal TUIC v5 client using the protocol's actual authentication frame.
-func dialTUIC(t *testing.T, ctx context.Context, port int, target xnet.Destination) io.ReadWriteCloser {
+func dialTUICConnection(t *testing.T, ctx context.Context, port int, masked bool) *quic.Conn {
 	t.Helper()
-	conn, err := quic.DialAddr(ctx, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), &tls.Config{InsecureSkipVerify: true, ServerName: "localhost", NextProtos: []string{"h3"}}, &quic.Config{EnableDatagrams: true})
+	tlsConfig := &tls.Config{InsecureSkipVerify: true, ServerName: "localhost", NextProtos: []string{"h3"}}
+	quicConfig := &quic.Config{EnableDatagrams: true}
+	address := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port}
+	var conn *quic.Conn
+	var err error
+	if masked {
+		settings, buildErr := internet.ToMemoryStreamConfig(&internet.StreamConfig{
+			ProtocolName: "tuic",
+			Udpmasks: []*serial.TypedMessage{
+				serial.ToTypedMessage(&salamander.Config{Password: protocolTestMaskPassword}),
+			},
+		})
+		if buildErr != nil {
+			t.Fatal(buildErr)
+		}
+		packetConn, dialErr := settings.FinalMask.DialUDP(ctx, xnet.UDPDestination(xnet.ParseAddress("127.0.0.1"), xnet.Port(port)))
+		if dialErr != nil {
+			t.Fatal(dialErr)
+		}
+		t.Cleanup(func() { packetConn.Close() })
+		conn, err = quic.Dial(ctx, packetConn.(*xnet.PacketConnWrapper).PacketConn, address, tlsConfig, quicConfig)
+	} else {
+		conn, err = quic.DialAddr(ctx, address.String(), tlsConfig, quicConfig)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { conn.CloseWithError(0, "") })
+	return conn
+}
+
+func dialTUIC(t *testing.T, ctx context.Context, port int, target xnet.Destination, masked bool) io.ReadWriteCloser {
+	t.Helper()
+	conn := dialTUICConnection(t, ctx, port, masked)
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -353,9 +414,14 @@ func authenticateTUIC(t *testing.T, ctx context.Context, conn *quic.Conn) {
 }
 
 func TestTUICUDPBeforeAuthentication(t *testing.T) {
-	for _, overStream := range []bool{false, true} {
-		t.Run(strconv.FormatBool(overStream), func(t *testing.T) {
-			server, port, _, _, _ := protocolServer(t, "tuic")
+	for _, tc := range []struct{ overStream, masked bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
+		t.Run("stream="+strconv.FormatBool(tc.overStream)+"/masked="+strconv.FormatBool(tc.masked), func(t *testing.T) {
+			overStream := tc.overStream
+			var variant []string
+			if tc.masked {
+				variant = []string{"salamander"}
+			}
+			server, port, _, _, _ := protocolServer(t, "tuic", variant...)
 			echo, err := net.ListenPacket("udp", "127.0.0.1:0")
 			if err != nil {
 				t.Fatal(err)
@@ -370,10 +436,7 @@ func TestTUICUDPBeforeAuthentication(t *testing.T) {
 			}()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			conn, err := quic.DialAddr(ctx, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"h3"}}, &quic.Config{EnableDatagrams: true})
-			if err != nil {
-				t.Fatal(err)
-			}
+			conn := dialTUICConnection(t, ctx, port, tc.masked)
 			defer conn.CloseWithError(0, "")
 			payload := []byte("TUIC UDP regression")
 			frame := []byte{5, 2, 0, 1, 0, 1, 1, 0, 0, byte(len(payload)), 1, 127, 0, 0, 1}
@@ -426,6 +489,59 @@ func TestTUICUDPBeforeAuthentication(t *testing.T) {
 			traffic, _ := server.GetUserTrafficSlice("protocol-test", 0)
 			if len(traffic) != 1 || traffic[0].Upload < int64(len(payload)) || traffic[0].Download < int64(len(payload)) {
 				t.Fatalf("UDP traffic = %+v", traffic)
+			}
+		})
+	}
+}
+
+func TestShadowsocksUDPProtocolsApplyDeviceAdmission(t *testing.T) {
+	for _, name := range []string{"shadowsocks", "shadowsocks/2022-blake3-aes-128-gcm", "shadowsocks/2022-blake3-aes-256-gcm"} {
+		t.Run(name, func(t *testing.T) {
+			parts := strings.Split(name, "/")
+			server, port, _, user, pin := protocolServer(t, parts[0], parts[1:]...)
+			limit, _ := server.LimiterManager.Get("protocol-test")
+			limited := user
+			limited.DeviceLimit = 1
+			limit.UpdateUser("protocol-test", []panel.UserInfo{limited}, []panel.UserInfo{user})
+			var claims atomic.Int32
+			limit.SetDeviceAdmission(func(_ context.Context, id int, ip string) (bool, time.Duration, error) {
+				claims.Add(1)
+				if id != user.Id || ip != "127.0.0.1" {
+					t.Errorf("UDP source identity: %d %q", id, ip)
+				}
+				return true, time.Minute, nil
+			})
+			echo, err := net.ListenPacket("udp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer echo.Close()
+			go func() {
+				data := make([]byte, 1500)
+				n, addr, err := echo.ReadFrom(data)
+				if err == nil {
+					echo.WriteTo(data[:n], addr)
+				}
+			}()
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			target := xnet.UDPDestination(xnet.ParseAddress("127.0.0.1"), xnet.Port(echo.LocalAddr().(*net.UDPAddr).Port))
+			conn, err := xray.Dial(ctx, protocolClient(t, parts[0], port, pin, parts[1:]...), target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			conn.SetDeadline(time.Now().Add(5 * time.Second))
+			payload := []byte("UDP device admission")
+			if _, err := conn.Write(payload); err != nil {
+				t.Fatal(err)
+			}
+			got := make([]byte, len(payload))
+			if _, err := io.ReadFull(conn, got); err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, payload) || claims.Load() != 1 {
+				t.Fatalf("UDP payload/claims: %q / %d", got, claims.Load())
 			}
 		})
 	}

@@ -36,6 +36,8 @@ func TestReloadPreservesServiceAndRollsBackWithoutPanel(t *testing.T) {
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/v1/server/alivelist":
+			fmt.Fprint(w, `{"alive":{}}`)
 		case "/v2/server/7":
 			json.NewEncoder(w).Encode(configForPort())
 		case "/v1/server/user":

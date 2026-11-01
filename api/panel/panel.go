@@ -23,7 +23,6 @@ type NodeClient struct {
 	UseProtobuf bool
 	userEtag    string
 	UserList    *UserListBody
-	AliveMap    *AliveMap
 }
 
 type ServerClient struct {
@@ -69,7 +68,6 @@ func NewNodeClient(c *conf.NodeApiConfig) (*NodeClient, error) {
 		NodeId:      c.NodeID,
 		UseProtobuf: c.UseProtobuf,
 		UserList:    &UserListBody{},
-		AliveMap:    &AliveMap{},
 	}, nil
 }
 

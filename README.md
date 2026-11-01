@@ -64,6 +64,22 @@ GOTOOLCHAIN=go1.27.1 GOOS=android GOARCH=arm64 CGO_ENABLED=0 go build -trimpath 
 GOTOOLCHAIN=go1.27.1 go test ./api/panel -run '^$' -bench BenchmarkDecodeUserList -benchmem
 ```
 
+## 在线设备限制
+
+需要先升级 backend，再升级节点：新增 `GET /v1/server/alivelist` 查询在线 IP 数量，
+以及 `POST /v1/server/device` 原子申请设备名额，均支持 JSON/Protobuf 和既有节点鉴权。
+旧 backend 缺少接口时节点会明确报错，不会把接口错误当作空在线列表。
+
+设备按 **订阅 ID + 来源 IP** 计数；同 IP 的多条 TCP/UDP 连接、IPv4 映射地址、
+跨协议或跨节点连接只占一个全局名额。NAT 后共享公网 IP 的设备会合并计数。
+`device_limit = 0` 不限制；有限额订阅的新 IP 需获得 backend 的 Redis 原子准入许可，
+避免多个节点同时读取旧人数后一起放行。已存在的 IP 租约可续期，上限针对新 IP 准入。
+
+在线心跳独立于流量上报，间隔不超过 60 秒；持续连接即使没有流量也会续期，短连接至少
+上报一次。关闭后的连接不再持续续期，最后一次申请或上报后的名额最多保留 5 分钟，
+以兼容同 IP 仍在其他节点使用的情况和节点离线。计数接口失败时保留上一份数据，
+用户撤销和限制变更继续同步；准入接口失败时拒绝有限额订阅的新设备，不静默放行。
+
 ## 流量与重载
 
 流量通过原子交换取数，未获面板确认的批次会在内存中合并并重试，重载及移除协议时也会保留。
@@ -75,16 +91,26 @@ GOTOOLCHAIN=go1.27.1 go test ./api/panel -run '^$' -bench BenchmarkDecodeUserLis
 重载会先准备新用户列表、证书和入站配置，再切换监听。新节点启动失败时恢复缓存的旧配置和用户，
 恢复过程不依赖面板；监听切换期间已有连接可能中断。
 
-## Xray 2026-08 升级说明
+## Xray 2026-09 升级说明
 
-内核固定在 `wyx2685/xray-core` 的 `83ad74c46335`
-（`v0.0.0-20260828071630-83ad74c46335`）。
+内核固定在 `wyx2685/xray-core` 的 `e087e74a1bf2`
+（`v0.0.0-20260930151924-e087e74a1bf2`）。
 
+- 通过 `go.mod` 的 `godebug multipathtcp=0` 将默认关闭 MPTCP 固化到构建产物中，
+  覆盖 Xray 及 pprof 等使用 Go 默认 TCP 监听的路径，无需在部署时额外设置环境变量。
+  这是对 [Xray MPTCP 安全公告](https://github.com/XTLS/Xray-core/releases/tag/v26.10.31)
+  的应用层缓解；该分支尚未合入官方监听器补丁。在 `GODEBUG` 中将 `multipathtcp` 设为
+  `1` 或 `2`，或显式配置 `sockopt.tcpMptcp: true`，仍可覆盖默认值。
+  部署时应避免重新开启，并更新宿主机 Linux 内核。
+- 适配新版错误 API 和 `FinalMask.ListenPacket`，SS2022 初始化用户使用协议要求的
+  16/32 字节密钥，构建入站时不再修改面板提供的服务器密钥。
 - TUIC 改用新的原生 QUIC 传输，出站配置中的用户标识使用 `id`。
   上游 TUIC 出站转发仍未实现，不能用于 TUIC 出站中继。
 - TUIC 传输模块包含项目内兼容修复，处理认证与首个请求并发时丢失请求的问题，
-  详见 [兼容模块说明](core/transport/tuic/README.md)。
-- 节点内部将 REALITY 的 `minClientVer` 固定为 `0.0.0`，覆盖内核默认的 `26.3.27`，
+  升级后继续保留，详见 [兼容模块说明](core/transport/tuic/README.md)。
+- 额外的 Hysteria2 UDP 关闭检查发现固定内核 `transport/internet/hysteria/conn.go`
+  中 `udpSessionManager.clean/run` 对 `closed` 的读写存在竞态；此上游问题尚未修复。
+- 节点内部继续将 REALITY 的 `minClientVer` 显式固定为 `0.0.0`，
   允许旧版本客户端通过最低版本检查；客户端仍需支持对应的协议和加密配置。
 - Shadowsocks 的 `none/plain` 和 TLS 的 `allowInsecure` 已被内核移除。
   自签名出站证书应在 `stream_settings` 的 `tlsSettings` 中设置

@@ -18,7 +18,11 @@ func buildShadowsocks(nodeInfo *panel.NodeInfo, inbound *coreConf.InboundDetourC
 	settings := &coreConf.ShadowsocksServerConfig{
 		Cipher: cipher,
 	}
-	p := make([]byte, 32)
+	keyLength := 32
+	if cipher == "2022-blake3-aes-128-gcm" {
+		keyLength = 16
+	}
+	p := make([]byte, keyLength)
 	_, err := rand.Read(p)
 	if err != nil {
 		return fmt.Errorf("generate random password error: %s", err)
@@ -26,9 +30,10 @@ func buildShadowsocks(nodeInfo *panel.NodeInfo, inbound *coreConf.InboundDetourC
 	randomPasswd := hex.EncodeToString(p)
 
 	if nodeInfo.Protocol.ServerKey != "" && strings.Contains(cipher, "2022") {
-		nodeInfo.Protocol.ServerKey = base64.StdEncoding.EncodeToString([]byte(nodeInfo.Protocol.ServerKey))
-		settings.Password = nodeInfo.Protocol.ServerKey
-		randomPasswd = base64.StdEncoding.EncodeToString([]byte(randomPasswd))
+		settings.Password = base64.StdEncoding.EncodeToString([]byte(nodeInfo.Protocol.ServerKey))
+		// SS2022 now validates every user's decoded key length, including the
+		// placeholder that selects the multi-user inbound before users load.
+		randomPasswd = base64.StdEncoding.EncodeToString(p)
 		cipher = ""
 	}
 	defaultSSuser := &coreConf.ShadowsocksUserConfig{

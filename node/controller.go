@@ -23,6 +23,7 @@ type Controller struct {
 	aliveMap                map[int]int
 	info                    *panel.NodeInfo
 	userListMonitorPeriodic *task.Task
+	onlinePeriodic          *task.Task
 	renewCertPeriodic       *task.Task
 	traffic                 *trafficQueue
 	prepared                bool
@@ -64,7 +65,7 @@ func (c *Controller) Prepare() error {
 	if err != nil {
 		return fmt.Errorf("get user list error: %s", err)
 	}
-	c.aliveMap, err = c.apiClient.GetUserAlive()
+	c.aliveMap, err = c.apiClient.GetUserAlive(context.Background())
 	if err != nil {
 		return fmt.Errorf("failed to get user alive list: %s", err)
 	}
@@ -91,6 +92,7 @@ func (c *Controller) Start() error {
 	}
 	if c.limiter == nil {
 		c.limiter = c.server.LimiterManager.Add(c.tag, c.userList, c.aliveMap, c.info.Type)
+		c.limiter.SetDeviceAdmission(c.apiClient.ClaimDevice)
 	}
 	if err := c.server.AddNodeConfig(c.inboundConfig); err != nil {
 		return err
@@ -114,6 +116,10 @@ func (c *Controller) Start() error {
 func (c *Controller) Stop() error {
 	if c == nil {
 		return nil
+	}
+	if c.onlinePeriodic != nil {
+		c.onlinePeriodic.Close()
+		c.onlinePeriodic = nil
 	}
 	if c.userListMonitorPeriodic != nil {
 		c.userListMonitorPeriodic.Close()

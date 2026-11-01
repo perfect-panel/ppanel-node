@@ -34,8 +34,8 @@ func TestLimiter_tracks_online_device_when_transport_requires_tracking(t *testin
 		{name: "Hysteria UDP alias", nodeType: "hysteria", noUDPSource: false, wantTracked: true},
 		{name: "TUIC UDP", nodeType: "tuic", noUDPSource: false, wantTracked: true},
 		{name: "Shadowsocks TCP", nodeType: "shadowsocks", noUDPSource: true, wantTracked: true},
-		{name: "Shadowsocks UDP", nodeType: "shadowsocks", noUDPSource: false, wantTracked: false},
-		{name: "unknown UDP", nodeType: "unknown", noUDPSource: false, wantTracked: false},
+		{name: "Shadowsocks UDP", nodeType: "shadowsocks", noUDPSource: false, wantTracked: true},
+		{name: "unknown UDP", nodeType: "unknown", noUDPSource: false, wantTracked: true},
 	}
 
 	for _, tt := range tests {
@@ -78,7 +78,7 @@ func TestLimiter_rejects_at_capacity_only_when_transport_requires_tracking(t *te
 		{name: "Hysteria UDP alias", nodeType: "hysteria", noUDPSource: false, wantReject: true, wantTracked: false},
 		{name: "TUIC UDP", nodeType: "tuic", noUDPSource: false, wantReject: true, wantTracked: false},
 		{name: "Shadowsocks TCP", nodeType: "shadowsocks", noUDPSource: true, wantReject: true, wantTracked: false},
-		{name: "Shadowsocks UDP", nodeType: "shadowsocks", noUDPSource: false, wantReject: false, wantTracked: false},
+		{name: "Shadowsocks UDP", nodeType: "shadowsocks", noUDPSource: false, wantReject: true, wantTracked: false},
 	}
 
 	for _, tt := range tests {

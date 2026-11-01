@@ -2,7 +2,6 @@ package node
 
 import (
 	"context"
-	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +22,12 @@ func (c *Controller) startTasks(node *panel.NodeInfo) {
 	}
 	_ = c.userListMonitorPeriodic.Start(false)
 	logx.Node(c.tag).Info("用户列表监控任务已启动")
+	// Lease renewals must not wait behind retries of failed traffic reports.
+	c.onlinePeriodic = &task.Task{
+		Name: "reportOnline", Interval: time.Duration(min(max(node.PushInterval, 1), 60)) * time.Second,
+		Execute: c.reportOnline,
+	}
+	_ = c.onlinePeriodic.Start(false)
 	if usesTLSCertificate(node) {
 		switch node.Protocol.CertMode {
 		case "none", "", "file", "self":
@@ -64,14 +69,13 @@ func (c *Controller) userListMonitor(ctx context.Context) (err error) {
 		return nil
 	}
 	// get user alive
-	newA, err := c.apiClient.GetUserAlive()
+	newA, err := c.apiClient.GetUserAlive(ctx)
 	if err != nil {
 		logx.Node(c.tag).WithError(err).Error("获取在线列表失败")
-		return nil
 	}
 	// update alive list
 	if newA != nil {
-		c.limiter.AliveList = newA
+		c.limiter.UpdateAliveList(newA)
 	}
 	// update user list
 	// newU == nil indicates 304 Not Modified; empty slice means the list is empty
@@ -103,10 +107,6 @@ func (c *Controller) userListMonitor(ctx context.Context) (err error) {
 	if len(added) > 0 || len(deleted) > 0 {
 		// update Limiter
 		c.limiter.UpdateUser(c.tag, added, deleted)
-		if err != nil {
-			logx.Node(c.tag).WithError(err).Error("更新限速用户失败")
-			return nil
-		}
 	}
 	c.userList = newU
 	if len(added)+len(deleted) != 0 {
@@ -118,34 +118,26 @@ func (c *Controller) userListMonitor(ctx context.Context) (err error) {
 	return nil
 }
 
-func (c *Controller) reportOnlineAndStatus(ctx context.Context, userTraffic []panel.UserTraffic) (err error) {
-	if onlineDevice, err := c.limiter.GetOnlineDevice(); err != nil {
+func (c *Controller) reportOnline(ctx context.Context) error {
+	if online, err := c.limiter.GetOnlineDevice(); err != nil {
 		logx.Node(c.tag).WithError(err).Error("获取在线设备失败")
-	} else if len(*onlineDevice) > 0 {
-		// Only report user has traffic > 100kb to allow ping test
-		var result []panel.OnlineUser
-		var nocountUID = make(map[int]struct{})
-		for _, traffic := range userTraffic {
-			total := traffic.Upload + traffic.Download
-			if total <= 0 {
-				nocountUID[traffic.UID] = struct{}{}
+		return err
+	} else {
+		// Match the backend's per-report bound. Each ACK renews only that batch.
+		for start := 0; start < len(*online); start += 10000 {
+			batch := (*online)[start:min(start+10000, len(*online))]
+			sentAt := time.Now()
+			if err := c.apiClient.ReportNodeOnlineUsers(ctx, &batch); err != nil {
+				logx.Node(c.tag).WithError(err).Error("上报在线用户失败")
+				return err
 			}
-		}
-		for _, online := range *onlineDevice {
-			if _, ok := nocountUID[online.UID]; !ok {
-				result = append(result, online)
-			}
-		}
-		if err = c.apiClient.ReportNodeOnlineUsers(ctx, &result); err != nil {
-			logx.Node(c.tag).WithError(err).Error("上报在线用户失败")
-		} else {
-			logx.Node(c.tag).WithFields(map[string]interface{}{
-				"online_total":    len(*onlineDevice),
-				"online_reported": len(result),
-			}).Info("已上报在线用户")
+			c.limiter.OnlineReportAcknowledged(batch, sentAt)
 		}
 	}
+	return nil
+}
 
+func (c *Controller) reportStatus(ctx context.Context) (err error) {
 	CPU, Mem, Disk, Uptime, err := serverstatus.GetSystemInfo()
 	if err != nil {
 		logx.Node(c.tag).WithError(err).Error("获取系统信息失败")
@@ -161,23 +153,21 @@ func (c *Controller) reportOnlineAndStatus(ctx context.Context, userTraffic []pa
 		logx.Node(c.tag).WithError(err).Error("上报节点状态失败")
 	}
 
-	userTraffic = nil
 	return nil
 }
 
 func compareUserList(old, new []panel.UserInfo) (deleted, added []panel.UserInfo) {
-	oldMap := make(map[string]int)
+	// Include the user ID and both limits, not only the authentication UUID.
+	oldMap := make(map[panel.UserInfo]int, len(old))
 	for i, user := range old {
-		key := user.Uuid + strconv.Itoa(user.SpeedLimit)
-		oldMap[key] = i
+		oldMap[user] = i
 	}
 
 	for _, user := range new {
-		key := user.Uuid + strconv.Itoa(user.SpeedLimit)
-		if _, exists := oldMap[key]; !exists {
+		if _, exists := oldMap[user]; !exists {
 			added = append(added, user)
 		} else {
-			delete(oldMap, key)
+			delete(oldMap, user)
 		}
 	}
 

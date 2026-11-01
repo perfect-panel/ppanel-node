@@ -10,6 +10,7 @@ import (
 type ManagedWriter struct {
 	writer  buf.Writer
 	manager *LinkManager
+	release func()
 }
 
 func (w *ManagedWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
@@ -18,6 +19,9 @@ func (w *ManagedWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
 
 func (w *ManagedWriter) Close() error {
 	w.manager.RemoveWriter(w)
+	if w.release != nil {
+		w.release()
+	}
 	return common.Close(w.writer)
 }
 

@@ -120,10 +120,9 @@ func (n *Node) Start() error {
 }
 
 func (n *Node) report(ctx context.Context) error {
-	snapshots := make(map[*Controller][]panel.UserTraffic)
 	for _, c := range n.controllers {
 		if c.started {
-			snapshots[c] = c.collectTraffic(max(c.info.TrafficReportThreshold, 0))
+			c.collectTraffic(max(c.info.TrafficReportThreshold, 0))
 		}
 	}
 	// Traffic ACKs take priority over online/status calls, which may time out.
@@ -133,7 +132,7 @@ func (n *Node) report(ctx context.Context) error {
 			return errors.Join(result, ctx.Err())
 		}
 		if c.started {
-			_ = c.reportOnlineAndStatus(ctx, snapshots[c])
+			_ = c.reportStatus(ctx)
 		}
 	}
 	return result

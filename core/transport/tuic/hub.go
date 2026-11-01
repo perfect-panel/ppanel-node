@@ -1,4 +1,5 @@
 // Derived from wyx2685/Xray-core 83ad74c46335, transport/internet/tuic.
+// Listener setup follows e087e74a1bf2's FinalMask API.
 // Licensed under MPL-2.0; see LICENSE and README.md in this directory.
 
 package tuic
@@ -48,21 +49,19 @@ func Listen(ctx context.Context, address xnet.Address, port xnet.Port, streamSet
 		return nil, errors.New("TUIC requires authenticator from context")
 	}
 
-	udpConn, err := internet.ListenSystemPacket(ctx, &net.UDPAddr{
+	addr := &net.UDPAddr{
 		IP:   address.IP(),
 		Port: int(port),
-	}, streamSettings.SocketSettings)
+	}
+	var udpConn net.PacketConn
+	var err error
+	if streamSettings.FinalMask != nil {
+		udpConn, err = streamSettings.FinalMask.ListenPacket(ctx, addr)
+	} else {
+		udpConn, err = internet.ListenSystemPacket(ctx, addr, streamSettings.SocketSettings)
+	}
 	if err != nil {
 		return nil, err
-	}
-
-	if streamSettings.UdpmaskManager != nil {
-		wrappedConn, err := streamSettings.UdpmaskManager.WrapPacketConnServer(udpConn)
-		if err != nil {
-			_ = udpConn.Close()
-			return nil, errors.New("mask err").Base(err)
-		}
-		udpConn = wrappedConn
 	}
 
 	serverTLSConfig := tlsConfig.GetTLSConfig(xtls.WithNextProto("h3"))
