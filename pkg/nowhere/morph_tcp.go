@@ -118,62 +118,99 @@ func setCarrierLinger(conn net.Conn, value int) error {
 
 // A Morph match is tentative: it neither warms authentication caches nor
 // clears source cooldown. Only the later exporter-bound AuthFrame does that.
-func (a *Authenticator) matchMorph(source netip.Addr, work int, match func(authCredential) bool) (authCredential, error) {
+func (a *Authenticator) matchMorph(source netip.Addr, work int, match func(*authCredential) bool) (*authCredential, error) {
 	for {
 		state := a.users.Load()
-		if state == nil || len(state.credentials) == 0 {
-			return authCredential{}, ErrNoUsers
+		if state == nil || state.count == 0 {
+			return nil, ErrNoUsers
 		}
-		candidates, _ := a.addressCache.Load(source, state.generation)
+		candidates, _ := a.addressCache.Load(source, authCacheGeneration)
 		var selected *authCredential
+		var scanPermit *authscan.Permit[netip.Addr]
+		var tried [authscan.CandidateCapacity]uint64
+		triedCount := 0
 		for i := 0; i < candidates.Count(); i++ {
-			index := int(candidates.At(i))
-			if index >= len(state.credentials) {
+			candidate := state.candidate(candidates.At(i))
+			if candidate == nil {
 				continue
 			}
+			tried[triedCount] = candidate.id
+			triedCount++
 			permit, ok := a.guard.AcquireKnown(source, work)
 			if !ok {
-				return authCredential{}, authscan.ErrLimited
+				return nil, authscan.ErrLimited
 			}
-			candidate := state.credentials[index]
 			valid := match(candidate)
 			permit.Release()
 			if valid {
-				selected = &candidate
+				selected = candidate
 				break
 			}
 		}
 		if selected == nil {
-			permit, ok := a.guard.Acquire(source, work*(len(state.credentials)-candidates.Count()))
+			permit, ok := a.guard.Acquire(source, scanWork(work, state.count-triedCount))
 			if !ok {
-				return authCredential{}, authscan.ErrLimited
+				return nil, authscan.ErrLimited
 			}
-			for i, candidate := range state.credentials {
-				if candidates.Contains(uint32(i)) {
-					continue
+			scanPermit = permit
+			state.each(func(candidate *authCredential) bool {
+				for _, id := range tried[:triedCount] {
+					if id == candidate.id {
+						return true
+					}
 				}
 				if match(candidate) {
-					selected = &candidate
-					break
+					selected = candidate
+					return false
 				}
-			}
-			if selected == nil {
-				permit.Done(false)
-			} else {
-				permit.Release()
-			}
+				return true
+			})
 		}
 		a.updateMu.RLock()
-		current := a.users.Load() == state
-		a.updateMu.RUnlock()
-		if !current {
+		if a.users.Load() != state {
+			a.updateMu.RUnlock()
+			// A stale snapshot cannot judge this source. In particular, do not
+			// arm cooldown before retrying against newly published users.
+			scanPermit.Release()
 			continue
 		}
 		if selected == nil {
-			return authCredential{}, ErrMorph
+			scanPermit.Done(false)
+			a.updateMu.RUnlock()
+			return nil, ErrMorph
 		}
-		return *selected, nil
+		scanPermit.Release()
+		a.updateMu.RUnlock()
+		return selected, nil
 	}
+}
+
+func scanWork(perCandidate, count int) int {
+	if perCandidate <= 0 || count <= 0 {
+		return 1
+	}
+	maxInt := int(^uint(0) >> 1)
+	if count > maxInt/perCandidate {
+		return maxInt
+	}
+	return perCandidate * count
+}
+
+// selectMorphTCP preprocesses the key-independent Prelude fields once.
+func (a *Authenticator) selectMorphTCP(source netip.Addr, bootstrap []byte) (*authCredential, preludeIdentity, error) {
+	if len(bootstrap) != morphPreludeLen+morphNonceLen {
+		return nil, preludeIdentity{}, ErrMorph
+	}
+	prepared, _ := preparePrelude(bootstrap[:morphPreludeLen], bootstrap[morphPreludeLen:])
+	var identity preludeIdentity
+	credential, err := a.matchMorph(source, 4, func(candidate *authCredential) bool {
+		value, valid := prepared.decode(&candidate.morph)
+		if valid {
+			identity = value
+		}
+		return valid
+	})
+	return credential, identity, err
 }
 
 func (p *Portal) acceptMorphTCP(raw net.Conn, config *tls.Config, deadline time.Time) (*morphTCPConn, *tls.Config, error) {
@@ -181,21 +218,14 @@ func (p *Portal) acceptMorphTCP(raw net.Conn, config *tls.Config, deadline time.
 	if _, err := io.ReadFull(raw, bootstrap[:]); err != nil {
 		return nil, nil, err
 	}
-	var identity preludeIdentity
-	credential, err := p.authenticator.matchMorph(physicalRemoteIP(raw), 4, func(candidate authCredential) bool {
-		value, valid := decodePrelude(candidate.morph, bootstrap[:64], bootstrap[64:])
-		if valid {
-			identity = value
-		}
-		return valid
-	})
+	credential, identity, err := p.authenticator.selectMorphTCP(physicalRemoteIP(raw), bootstrap[:])
 	if err != nil {
 		return nil, nil, err
 	}
 	if !p.prelude.accept(credential.key, identity, false) {
 		return nil, nil, ErrMorphReplay
 	}
-	c := &morphTCPConn{Conn: raw, keys: credential.morph, authentication: Authentication{Identity: credential.identity, key: credential.key}}
+	c := &morphTCPConn{Conn: raw, keys: credential.morph, authentication: credential.authentication()}
 	copy(c.nonce[:], bootstrap[64:])
 	cloned := config.Clone()
 	original := config.GetConfigForClient

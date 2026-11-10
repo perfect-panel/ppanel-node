@@ -18,8 +18,16 @@ const morphPeerLimit = 64
 const morphCIDLimit = 32
 const morphAliasLimit = 8
 
+// Readers borrow bounded scratch buffers. Plaintext is copied into the caller's
+// buffer; routes retain owned CID strings, never references to this storage.
+type morphReadBuffers struct{ wire, plain [65535]byte }
+
+var morphReadPool = sync.Pool{New: func() any { return new(morphReadBuffers) }}
+
+const morphHeaderBytes = 7 + 2*20
+
 type morphUDPRoute struct {
-	credential           authCredential
+	credential           *authCredential
 	authentication       Authentication
 	peers                map[netip.AddrPort]struct{}
 	serverIDs, clientIDs map[string]uint64
@@ -77,7 +85,10 @@ func matchesCID(packet []byte, ids map[string]uint64) bool {
 }
 func (c *morphPacketConn) removeLocked(route *morphUDPRoute) {
 	for id := range route.serverIDs {
-		delete(c.index, morphCIDKey{route.credential.key, id})
+		key := morphCIDKey{route.credential.key, id}
+		if c.index[key] == route {
+			delete(c.index, key)
+		}
 	}
 	route.removed = true
 	delete(c.routes, route)
@@ -116,9 +127,11 @@ func (c *morphPacketConn) addPeerLocked(route *morphUDPRoute, peer netip.AddrPor
 func (c *morphPacketConn) ReadFrom(output []byte) (int, net.Addr, error) {
 	// Do not expose UDPConn/OOB interfaces: one nonce belongs to one datagram,
 	// including on platforms with GRO/GSO. Retain space for the outer nonce.
-	var wire [65535]byte
+	buffers := morphReadPool.Get().(*morphReadBuffers)
+	defer morphReadPool.Put(buffers)
+	wire := buffers.wire[:]
 	for {
-		n, address, err := c.PacketConn.ReadFrom(wire[:])
+		n, address, err := c.PacketConn.ReadFrom(wire)
 		if err != nil {
 			return 0, address, err
 		}
@@ -132,7 +145,8 @@ func (c *morphPacketConn) ReadFrom(output []byte) (int, net.Addr, error) {
 		var nonce [12]byte
 		copy(nonce[:], wire[:12])
 		masked := wire[12:n]
-		plain := make([]byte, len(masked))
+		plain := buffers.plain[:len(masked)]
+		header := plain[:min(len(plain), morphHeaderBytes)]
 		c.mu.Lock()
 		c.sweepLocked(time.Now())
 		var route *morphUDPRoute
@@ -140,8 +154,9 @@ func (c *morphPacketConn) ReadFrom(output []byte) (int, net.Addr, error) {
 			if !c.auth.IsCurrent(candidate.authentication) {
 				continue
 			}
-			_ = morphXOR(plain, masked, candidate.credential.morph.UDPC2S, nonce, 0)
-			if matchesCID(plain, candidate.serverIDs) {
+			_ = morphXOR(header, masked[:len(header)], candidate.credential.morph.UDPC2S, nonce, 0)
+			if matchesCID(header, candidate.serverIDs) {
+				_ = morphXOR(plain, masked, candidate.credential.morph.UDPC2S, nonce, 0)
 				route = candidate
 				break
 			}
@@ -151,16 +166,19 @@ func (c *morphPacketConn) ReadFrom(output []byte) (int, net.Addr, error) {
 			// Unknown peers may be a first Initial or a QUIC path migration. Both
 			// selection and source work budgets are scoped to the physical sender.
 			var initial bool
-			credential, matchErr := c.auth.matchMorph(peer.Addr(), max(16, len(masked)/16), func(candidate authCredential) bool {
+			credential, matchErr := c.auth.matchMorph(peer.Addr(), max(16, len(masked)/16), func(candidate *authCredential) bool {
 				route = nil
 				initial = false
-				_ = morphXOR(plain, masked, candidate.morph.UDPC2S, nonce, 0)
+				// A short header rejects wrong keys before full decryption. It
+				// never authenticates a new route: the complete Initial AEAD and
+				// the later exporter-bound AuthFrame are still mandatory.
+				_ = morphXOR(header, masked[:len(header)], candidate.morph.UDPC2S, nonce, 0)
 				c.mu.Lock()
 				var id []byte
-				if len(plain) > 0 && plain[0]&0x80 != 0 {
-					id, _, _, _ = quicLongIDs(plain)
-				} else if len(plain) >= 9 && plain[0]&0x40 != 0 {
-					id = plain[1:9]
+				if len(header) > 0 && header[0]&0x80 != 0 {
+					id, _, _, _ = quicLongIDs(header)
+				} else if len(header) >= 9 && header[0]&0x40 != 0 {
+					id = header[1:9]
 				}
 				if id != nil {
 					existing := c.index[morphCIDKey{candidate.key, string(id)}]
@@ -171,8 +189,14 @@ func (c *morphPacketConn) ReadFrom(output []byte) (int, net.Addr, error) {
 
 				c.mu.Unlock()
 				if route != nil {
+					_ = morphXOR(plain, masked, candidate.morph.UDPC2S, nonce, 0)
 					return true
 				}
+				dcid, _, _, ok := quicLongIDs(header)
+				if !ok || header[0]&0x30 != 0 || len(dcid) < 8 {
+					return false
+				}
+				_ = morphXOR(plain, masked, candidate.morph.UDPC2S, nonce, 0)
 				initial = validClientInitial(plain)
 				return initial
 			})
@@ -182,7 +206,7 @@ func (c *morphPacketConn) ReadFrom(output []byte) (int, net.Addr, error) {
 			c.mu.Lock()
 			if route == nil && initial && len(c.routes) < morphRouteLimit && len(c.peers[peer]) < morphPeerLimit {
 				dcid, scid, _, _ := quicLongIDs(plain)
-				route = &morphUDPRoute{credential: credential, authentication: Authentication{Identity: credential.identity, key: credential.key}, peers: make(map[netip.AddrPort]struct{}), serverIDs: map[string]uint64{string(dcid): 0}, clientIDs: map[string]uint64{string(scid): 0}, expires: time.Now().Add(30 * time.Second)}
+				route = &morphUDPRoute{credential: credential, authentication: credential.authentication(), peers: make(map[netip.AddrPort]struct{}), serverIDs: map[string]uint64{string(dcid): 0}, clientIDs: map[string]uint64{string(scid): 0}, expires: time.Now().Add(30 * time.Second)}
 				c.routes[route] = struct{}{}
 				c.index[morphCIDKey{credential.key, string(dcid)}] = route
 			}

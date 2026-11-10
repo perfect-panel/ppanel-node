@@ -26,7 +26,7 @@ func registryAuthentication(t *testing.T, a *Authenticator) Authentication {
 		t.Fatal(err)
 	}
 	key, _ := DeriveAuthKey([]byte(testSharedKey))
-	return Authentication{Identity: "alice", key: key}
+	return a.users.Load().credential(key).authentication()
 }
 func TestRegistryLimitsAndStalePublication(t *testing.T) {
 	a := NewAuthenticator()

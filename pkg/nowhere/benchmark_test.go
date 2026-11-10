@@ -58,8 +58,7 @@ func BenchmarkAuthenticatorMultiUser(b *testing.B) {
 				}
 			})
 			b.Run("morph-selected", func(b *testing.B) {
-				index := authenticator.users.Load().byKey[key]
-				selected := Authentication{Identity: authenticator.users.Load().credentials[index].identity, key: key}
+				selected := authenticator.users.Load().credential(key).authentication()
 				frame, err := EncodeAuthFrame(key, AuthTransportTLSTCP, exporter)
 				if err != nil {
 					b.Fatal(err)

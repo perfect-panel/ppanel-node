@@ -17,7 +17,7 @@ import (
 	"github.com/sagernet/quic-go/qlog"
 )
 
-func captureInitial(t *testing.T) []byte {
+func captureInitial(t testing.TB) []byte {
 	t.Helper()
 	raw, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
@@ -114,7 +114,7 @@ func TestMorphUDPUserIsolationCIDRotationAndRevocation(t *testing.T) {
 	}
 	raw := &queuedMorphPacketConn{peer: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 7777}}
 	conn := newMorphPacketConn(raw, auth)
-	credentials := auth.users.Load().credentials
+	credentials := []*authCredential{auth.users.Load().user("alice"), auth.users.Load().user("bob")}
 	var initials [][]byte
 	for _, credential := range credentials {
 		initial := captureInitial(t)

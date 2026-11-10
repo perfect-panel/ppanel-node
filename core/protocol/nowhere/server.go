@@ -39,6 +39,7 @@ type Handler struct {
 	registry        *nw.FlowRegistry
 	portal          *nw.Portal
 	usersMu         sync.RWMutex
+	userUpdateMu    sync.Mutex
 	users           map[string]*protocol.MemoryUser
 	mu              sync.Mutex
 	started, closed bool

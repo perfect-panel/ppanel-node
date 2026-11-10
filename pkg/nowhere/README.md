@@ -26,10 +26,32 @@ the 12-byte Morph envelope without GSO/GRO or path MTU discovery.
 
 Authenticated connections use sing's `TCPConnectionHandlerEx` and
 `UDPConnectionHandlerEx`; `auth.UserFromContext[string]` returns `User.Name`.
-Handlers report handshake success before accessing payload. Applications publish
-users through `PrepareAuthUpdate` / `Authenticator.Commit`, then call
-`FlowRegistry.CloseStale` to close revoked carriers. Admission checks current
-credentials even between publication and that sweep.
+Handlers report handshake success before accessing payload. Applications build
+initial tables with `PrepareAuthUpdate`. Subsequent additions, rotations and
+removals use `Authenticator.PrepareChanges` followed by `Commit`; stale deltas
+return `ErrStaleAuthUpdate` and must be prepared again. Delta updates copy only
+affected index shards and reuse unchanged credentials and derived keys. After
+publication, call `FlowRegistry.CloseStale` to close revoked carriers. Admission
+checks current credentials even between publication and that sweep.
+
+Candidate caches retain stable, never-reused credential IDs across updates.
+Removed IDs cannot authenticate or bypass failure cooldown, even if the same
+key and identity are later re-added. A cold source still requires a linear key
+search. Prelude checks use stack-backed HMAC inputs and unpack request fields
+once; QUIC rejects wrong keys from a short header before decrypting and
+authenticating the complete Initial. Authentication work budgets are unchanged.
+
+Measure the complete Morph selection plus AuthFrame checks, and an incremental
+add/remove cycle, with:
+
+```sh
+go test -run '^$' -bench '^(BenchmarkMorphAuthentication|BenchmarkAuthUserChanges)$' -benchmem
+```
+
+The cold benchmark targets the final index shard (near-worst scan length),
+excludes network/TLS handshake time, and expands the test work budget to measure
+algorithm cost rather than production throttling. `morph-selected` in the older
+microbenchmark measures only the final AuthFrame check, not key selection.
 
 Shared keys are exactly **32 lowercase hexadecimal ASCII characters**. They are
 used as text, not hex-decoded bytes. ALPN is exactly `nw3`. TLS carries one flow

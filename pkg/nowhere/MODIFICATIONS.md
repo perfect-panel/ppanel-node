@@ -22,3 +22,8 @@ and the accompanying license files.
 - 2026-11-10: Published the local module as `github.com/perfect-panel/nowhere`
   under `pkg/nowhere`; added the Xray adapter and interoperability tests in the
   host application. Xray's dependency source and pinned version are unchanged.
+- 2026-11-10: Removed per-candidate Morph allocations using short-message HMAC,
+  shared Prelude preprocessing, immutable credential references, short QUIC
+  header filtering and pooled read scratch. Replaced full-table rebuilds for
+  deltas with copy-on-write index shards and stable candidate IDs; retained
+  work budgets, AEAD checks, exporter binding, replay protection and revocation.

@@ -14,16 +14,19 @@ const (
 	candidateCapacity = 4
 )
 
+// CandidateCapacity is the maximum remembered credentials per source.
+const CandidateCapacity = candidateCapacity
+
 type Candidates struct {
 	generation uint64
-	indexes    [candidateCapacity]uint32
+	indexes    [candidateCapacity]uint64
 	count      uint8
 }
 
 func (c Candidates) Count() int            { return int(c.count) }
-func (c Candidates) At(index int) uint32   { return c.indexes[index] }
-func (c Candidates) First() (uint32, bool) { return c.indexes[0], c.count > 0 }
-func (c Candidates) Contains(value uint32) bool {
+func (c Candidates) At(index int) uint64   { return c.indexes[index] }
+func (c Candidates) First() (uint64, bool) { return c.indexes[0], c.count > 0 }
+func (c Candidates) Contains(value uint64) bool {
 	for index := 0; index < int(c.count); index++ {
 		if c.indexes[index] == value {
 			return true
@@ -70,7 +73,7 @@ func (c *Cache[K]) Load(key K, generation uint64) (Candidates, bool) {
 	return candidates, true
 }
 
-func (c *Cache[K]) Store(key K, generation uint64, userIndex uint32) {
+func (c *Cache[K]) Store(key K, generation uint64, userIndex uint64) {
 	if generation < c.minimumGeneration.Load() {
 		return
 	}
@@ -142,11 +145,11 @@ func (c *Cache[K]) RemapGeneration(from, to uint64, mapping []int) {
 			}
 			remapped := Candidates{generation: to}
 			for candidateIndex := 0; candidateIndex < candidates.Count(); candidateIndex++ {
-				oldIndex := int(candidates.At(candidateIndex))
-				if oldIndex >= len(mapping) || mapping[oldIndex] < 0 {
+				oldID := candidates.At(candidateIndex)
+				if oldID >= uint64(len(mapping)) || mapping[int(oldID)] < 0 {
 					continue
 				}
-				newIndex := uint32(mapping[oldIndex])
+				newIndex := uint64(mapping[int(oldID)])
 				if remapped.Contains(newIndex) {
 					continue
 				}

@@ -7,7 +7,7 @@ import (
 
 func TestCachePromotesRecentCandidatesAndInvalidatesGeneration(t *testing.T) {
 	cache := NewCache[int](func(value int) uint64 { return uint64(value) })
-	for index := uint32(0); index < candidateCapacity+2; index++ {
+	for index := uint64(0); index < candidateCapacity+2; index++ {
 		cache.Store(7, 1, index)
 	}
 	candidates, loaded := cache.Load(7, 1)
@@ -25,7 +25,7 @@ func TestCachePromotesRecentCandidatesAndInvalidatesGeneration(t *testing.T) {
 func TestCacheBoundsSourceEntries(t *testing.T) {
 	cache := NewCache[int](func(int) uint64 { return 0 })
 	for key := 0; key < entriesPerShard*2; key++ {
-		cache.Store(key, 1, uint32(key))
+		cache.Store(key, 1, uint64(key))
 	}
 	if entries := len(cache.shards[0].entries); entries != entriesPerShard {
 		t.Fatalf("entries = %d, want %d", entries, entriesPerShard)
@@ -37,7 +37,7 @@ func TestCacheBoundsSourceEntries(t *testing.T) {
 // every slot up to the count as a real candidate.
 func TestCachePromotionDoesNotInflateCount(t *testing.T) {
 	cache := NewCache[int](func(key int) uint64 { return uint64(key) })
-	for _, value := range []uint32{111, 222, 111, 222} {
+	for _, value := range []uint64{111, 222, 111, 222} {
 		cache.Store(7, 1, value)
 	}
 	candidates, loaded := cache.Load(7, 1)
@@ -61,7 +61,7 @@ func TestCacheWithCapacityBoundsAtTheGivenSize(t *testing.T) {
 	const perShard = 512
 	cache := NewCacheWithCapacity[int](func(int) uint64 { return 0 }, perShard)
 	for key := range perShard * 2 {
-		cache.Store(key, 1, uint32(key))
+		cache.Store(key, 1, uint64(key))
 	}
 	resident := 0
 	for key := range perShard * 2 {
@@ -75,7 +75,7 @@ func TestCacheWithCapacityBoundsAtTheGivenSize(t *testing.T) {
 	// The default must be unchanged for every existing caller.
 	byDefault := NewCache[int](func(int) uint64 { return 0 })
 	for key := range entriesPerShard * 2 {
-		byDefault.Store(key, 1, uint32(key))
+		byDefault.Store(key, 1, uint64(key))
 	}
 	resident = 0
 	for key := range entriesPerShard * 2 {
@@ -90,7 +90,7 @@ func TestCacheWithCapacityBoundsAtTheGivenSize(t *testing.T) {
 
 func TestCacheRemapsUnchangedCandidatesAcrossGeneration(t *testing.T) {
 	cache := NewCache[int](func(value int) uint64 { return uint64(value) })
-	for _, index := range []uint32{1, 3, 2} {
+	for _, index := range []uint64{1, 3, 2} {
 		cache.Store(7, 4, index)
 	}
 	cache.Store(8, 3, 1)

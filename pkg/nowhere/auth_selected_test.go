@@ -27,7 +27,7 @@ func selectedAuthFixture(t *testing.T, count int) (*Authenticator, []User, Authe
 	if err != nil {
 		t.Fatal(err)
 	}
-	return a, records, Authentication{Identity: records[count-1].Name, key: key}
+	return a, records, a.users.Load().credential(key).authentication()
 }
 func commitSelectedUsers(t *testing.T, a *Authenticator, users []User) {
 	t.Helper()
@@ -62,8 +62,8 @@ func TestSelectedAuthenticationUsesOneWorkUnitWithoutScan(t *testing.T) {
 			if err != nil || got != selected {
 				t.Fatalf("selected auth=%+v %v", got, err)
 			}
-			candidates, loaded := a.addressCache.Load(source, a.users.Load().generation)
-			if !loaded || candidates.Count() != 1 || candidates.At(0) != 31 {
+			candidates, loaded := a.addressCache.Load(source, authCacheGeneration)
+			if !loaded || candidates.Count() != 1 || candidates.At(0) != selected.id {
 				t.Fatalf("successful auth cache=%+v", candidates)
 			}
 		})
@@ -96,7 +96,7 @@ func TestSelectedAuthenticationRejectsOtherUserAndReplay(t *testing.T) {
 				if err == nil || got != (Authentication{}) {
 					t.Fatalf("accepted mismatch: %+v %v", got, err)
 				}
-				if candidates, loaded := a.addressCache.Load(source, a.users.Load().generation); loaded || candidates.Count() != 0 {
+				if candidates, loaded := a.addressCache.Load(source, authCacheGeneration); loaded || candidates.Count() != 0 {
 					t.Fatal("failed auth warmed candidate cache")
 				}
 				if mode != "invalid_transport" && !a.guard.SourceBlocked(source) {
@@ -132,7 +132,7 @@ func TestSelectedAuthenticationChecksCurrentKeyAndOwner(t *testing.T) {
 				if !errors.Is(err, ErrAuthentication) {
 					t.Fatalf("stale selection=%v", err)
 				}
-				if _, loaded := a.addressCache.Load(source, a.users.Load().generation); loaded {
+				if hasCurrentCachedCandidate(a, source) {
 					t.Fatal("stale selection warmed cache")
 				}
 			}
@@ -147,7 +147,7 @@ func TestSelectedAuthenticationKeepsGuardLimits(t *testing.T) {
 			now := time.Now()
 			a.guard = authscan.NewGuard(authscan.HashAddr, authscan.GuardOptions{WorkRate: 1, WorkBurst: 8, Concurrent: 1, TimeFunc: func() time.Time { return now }})
 			if mode != "cooldown" {
-				a.addressCache.Store(source, a.users.Load().generation, 0)
+				a.addressCache.Store(source, authCacheGeneration, selected.id)
 			}
 			switch mode {
 			case "cooldown", "cached_cooldown":
@@ -207,7 +207,7 @@ func TestSelectedAuthenticationConcurrentRemovalDoesNotRepublishCache(t *testing
 		if _, err = a.authenticateSelected(frame, AuthTransportTLSTCP, testExporter(), source, selected); !errors.Is(err, ErrAuthentication) {
 			t.Fatalf("accepted after removal: %v", err)
 		}
-		if _, loaded := a.addressCache.Load(source, a.users.Load().generation); loaded {
+		if hasCurrentCachedCandidate(a, source) {
 			t.Fatal("old authentication republished removed user's cache")
 		}
 	}
@@ -226,4 +226,15 @@ func TestMorphQUICSelectionRequiresBoundRoute(t *testing.T) {
 	if got, ok := morphQUICSelection(ctx); !ok || got != selected {
 		t.Fatalf("selection=%+v %v", got, ok)
 	}
+}
+
+func hasCurrentCachedCandidate(a *Authenticator, source netip.Addr) bool {
+	candidates, _ := a.addressCache.Load(source, authCacheGeneration)
+	state := a.users.Load()
+	for i := 0; i < candidates.Count(); i++ {
+		if state.candidate(candidates.At(i)) != nil {
+			return true
+		}
+	}
+	return false
 }

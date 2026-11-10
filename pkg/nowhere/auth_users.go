@@ -27,27 +27,10 @@ var (
 
 // User is one stable application identity and its Nowhere shared key. Name is
 // carried through sing's authenticated-user context and is never serialized on
-// the wire.
+// the wire. Each name and each key must be unique within an authenticator.
 type User struct {
 	Name string
 	Key  []byte
-}
-
-type authCredential struct {
-	identity string
-	key      AuthKey
-	mac      authenticationMAC
-	morph    MorphKeys
-}
-
-type authGeneration struct {
-	generation  uint64
-	credentials []authCredential
-	byKey       map[AuthKey]int
-}
-
-type AuthUpdate struct {
-	state *authGeneration
 }
 
 // Authentication is the stable identity and credential admitted for one
@@ -56,6 +39,7 @@ type AuthUpdate struct {
 type Authentication struct {
 	Identity string
 	key      AuthKey
+	id       uint64
 }
 
 type Authenticator struct {
@@ -70,60 +54,8 @@ func NewAuthenticator() *Authenticator {
 		addressCache: authscan.NewCacheWithCapacity(authscan.HashAddr, authCacheEntriesPerShard),
 		guard:        authscan.NewGuard(authscan.HashAddr, authscan.GuardOptions{WorkRate: nowhereAuthScanWorkRate}),
 	}
-	authenticator.users.Store(&authGeneration{generation: 1, byKey: make(map[AuthKey]int)})
+	authenticator.users.Store(&authGeneration{generation: 1})
 	return authenticator
-}
-
-func PrepareAuthUpdate(records []User) (*AuthUpdate, error) {
-	state := &authGeneration{
-		credentials: make([]authCredential, len(records)),
-		byKey:       make(map[AuthKey]int, len(records)),
-	}
-	for index, user := range records {
-		if user.Name == "" || len(user.Key) == 0 {
-			return nil, ErrInvalidUser
-		}
-		key, err := DeriveAuthKey(user.Key)
-		if err != nil {
-			return nil, err
-		}
-		if _, exists := state.byKey[key]; exists {
-			return nil, ErrDuplicateAuthKey
-		}
-		state.credentials[index] = authCredential{
-			identity: user.Name,
-			key:      key,
-			mac:      newAuthenticationMAC(key),
-			morph:    deriveMorphKeys(user.Key),
-		}
-		state.byKey[key] = index
-	}
-	return &AuthUpdate{state: state}, nil
-}
-
-func (authenticator *Authenticator) Commit(update *AuthUpdate) error {
-	if update == nil || update.state == nil {
-		return errors.New("nowhere: invalid authentication update")
-	}
-	authenticator.updateMu.Lock()
-	defer authenticator.updateMu.Unlock()
-	current := authenticator.users.Load()
-	state := *update.state
-	state.generation = 1
-	if current != nil {
-		state.generation = current.generation + 1
-		mapping := make([]int, len(current.credentials))
-		for oldIndex, credential := range current.credentials {
-			mapping[oldIndex] = -1
-			if newIndex, exists := state.byKey[credential.key]; exists {
-				mapping[oldIndex] = newIndex
-			}
-		}
-		authenticator.addressCache.RemapGeneration(current.generation, state.generation, mapping)
-	}
-	authenticator.users.Store(&state)
-	update.state = nil
-	return nil
 }
 
 func (authenticator *Authenticator) Authenticate(
@@ -139,79 +71,57 @@ func (authenticator *Authenticator) Authenticate(
 // AuthenticateConnection authenticates one connection against an immutable
 // user generation. If a user update races the scan, it retries rather than
 // attributing the connection to a removed or changed credential.
-func (authenticator *Authenticator) AuthenticateConnection(
-	frame AuthFrame,
-	transport AuthTransport,
-	exporter TLSExporter,
-	source netip.Addr,
-) (Authentication, error) {
+func (authenticator *Authenticator) AuthenticateConnection(frame AuthFrame, transport AuthTransport, exporter TLSExporter, source netip.Addr) (Authentication, error) {
 	if transport != AuthTransportTLSTCP && transport != AuthTransportQUIC {
 		return Authentication{}, ErrInvalidAuthFrame
 	}
-	tag := frame[:]
 	for {
 		state := authenticator.users.Load()
-		if state == nil || len(state.credentials) == 0 {
+		if state == nil || state.count == 0 {
 			return Authentication{}, ErrNoUsers
 		}
-		var tried [8]uint32
+		var tried [authscan.CandidateCapacity]uint64
 		triedCount := 0
-		wasTried := func(index uint32) bool {
-			for position := range triedCount {
-				if tried[position] == index {
-					return true
-				}
+		candidates, _ := authenticator.addressCache.Load(source, authCacheGeneration)
+		var matched *authCredential
+		for i := 0; i < candidates.Count(); i++ {
+			c := state.candidate(candidates.At(i))
+			if c == nil {
+				continue
 			}
-			return false
-		}
-		tryCandidates := func(candidates authscan.Candidates) (uint32, bool) {
-			for position := 0; position < candidates.Count(); position++ {
-				index := candidates.At(position)
-				if int(index) >= len(state.credentials) {
-					continue
-				}
-				if wasTried(index) {
-					continue
-				}
-				tried[triedCount] = index
-				triedCount++
-				credential := state.credentials[index]
-				if validAuthTag(tag, credential.mac, transport, exporter) {
-					return index, true
-				}
-			}
-			return 0, false
-		}
-		var matchedIndex uint32
-		matched := false
-		if !matched && source.IsValid() {
-			if candidates, loaded := authenticator.addressCache.Load(source, state.generation); loaded {
-				matchedIndex, matched = tryCandidates(candidates)
+			tried[triedCount] = c.id
+			triedCount++
+			if validAuthTag(frame[:], c.mac, transport, exporter) {
+				matched = c
+				break
 			}
 		}
-		if matched {
-			if authentication, current := authenticator.publishMatch(state, matchedIndex, source); current {
-				return authentication, nil
+		if matched != nil {
+			if result, current := authenticator.publishMatch(state, matched, source); current {
+				return result, nil
 			}
 			continue
 		}
-
-		work := len(state.credentials) - triedCount
-		permit, allowed := authenticator.guard.Acquire(source, work)
+		permit, allowed := authenticator.guard.Acquire(source, state.count-triedCount)
 		if !allowed {
 			return Authentication{}, authscan.ErrLimited
 		}
-		for index, credential := range state.credentials {
-			if wasTried(uint32(index)) || !validAuthTag(tag, credential.mac, transport, exporter) {
-				continue
+		state.each(func(c *authCredential) bool {
+			for _, id := range tried[:triedCount] {
+				if id == c.id {
+					return true
+				}
 			}
-			matchedIndex, matched = uint32(index), true
-			break
-		}
-		if matched {
-			if authentication, current := authenticator.publishMatch(state, matchedIndex, source); current {
+			if validAuthTag(frame[:], c.mac, transport, exporter) {
+				matched = c
+				return false
+			}
+			return true
+		})
+		if matched != nil {
+			if result, current := authenticator.publishMatch(state, matched, source); current {
 				permit.Done(true)
-				return authentication, nil
+				return result, nil
 			}
 			permit.Release()
 			continue
@@ -249,14 +159,14 @@ func (authenticator *Authenticator) authenticateSelected(
 	if state == nil {
 		return Authentication{}, ErrAuthentication
 	}
-	index, exists := state.byKey[selected.key]
-	if !exists || state.credentials[index].identity != selected.Identity {
+	credential := state.credential(selected.key)
+	if credential == nil || credential.identity != selected.Identity || credential.id != selected.id {
 		return Authentication{}, ErrAuthentication
 	}
-	candidates, _ := authenticator.addressCache.Load(source, state.generation)
+	candidates, _ := authenticator.addressCache.Load(source, authCacheGeneration)
 	var permit *authscan.Permit[netip.Addr]
 	var allowed bool
-	if source.IsValid() && candidates.Contains(uint32(index)) {
+	if source.IsValid() && candidates.Contains(credential.id) {
 		// Only a previously authenticated candidate can bypass source cooldown.
 		permit, allowed = authenticator.guard.AcquireKnown(source, 1)
 	} else {
@@ -266,34 +176,33 @@ func (authenticator *Authenticator) authenticateSelected(
 		return Authentication{}, authscan.ErrLimited
 	}
 	defer permit.Release()
-	if !validAuthTag(frame[:], state.credentials[index].mac, transport, exporter) {
+	if !validAuthTag(frame[:], credential.mac, transport, exporter) {
 		permit.Done(false)
 		return Authentication{}, ErrAuthentication
 	}
-	authenticator.admit(source, state.generation, uint32(index))
+	authenticator.admit(source, credential.id)
 	return selected, nil
 }
 
-func (authenticator *Authenticator) admit(source netip.Addr, generation uint64, index uint32) {
+func (authenticator *Authenticator) admit(source netip.Addr, id uint64) {
 	if source.IsValid() {
-		authenticator.addressCache.Store(source, generation, index)
+		authenticator.addressCache.Store(source, authCacheGeneration, id)
 		authenticator.guard.Reset(source)
 	}
 }
 
 func (authenticator *Authenticator) publishMatch(
 	state *authGeneration,
-	index uint32,
+	credential *authCredential,
 	source netip.Addr,
 ) (Authentication, bool) {
 	authenticator.updateMu.RLock()
 	defer authenticator.updateMu.RUnlock()
-	if authenticator.users.Load() != state || int(index) >= len(state.credentials) {
+	if authenticator.users.Load() != state || state.candidate(credential.id) != credential {
 		return Authentication{}, false
 	}
-	credential := state.credentials[index]
-	authenticator.admit(source, state.generation, index)
-	return Authentication{Identity: credential.identity, key: credential.key}, true
+	authenticator.admit(source, credential.id)
+	return credential.authentication(), true
 }
 
 // IsCurrent reports whether an authenticated carrier still belongs to a
@@ -303,8 +212,8 @@ func (authenticator *Authenticator) IsCurrent(authentication Authentication) boo
 	if state == nil {
 		return false
 	}
-	index, exists := state.byKey[authentication.key]
-	return exists && state.credentials[index].identity == authentication.Identity
+	credential := state.credential(authentication.key)
+	return credential != nil && credential.identity == authentication.Identity && credential.id == authentication.id
 }
 
 func validAuthTag(

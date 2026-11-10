@@ -51,12 +51,7 @@ func DeriveAuthKey(sharedKey []byte) (AuthKey, error) {
 		return AuthKey{}, ErrInvalidSharedKey
 	}
 	authRoot := hmacSHA256(authRootSalt[:], sharedKey)
-	mac := hmac.New(sha256.New, authRoot[:])
-	_, _ = mac.Write([]byte("vector-authentication"))
-	_, _ = mac.Write([]byte{1})
-	var key AuthKey
-	copy(key[:], mac.Sum(nil))
-	return key, nil
+	return AuthKey(hmacSHA256(authRoot[:], []byte("vector-authentication\x01"))), nil
 }
 
 func ValidSharedKey(sharedKey []byte) bool {
@@ -137,8 +132,30 @@ func ReadAuthFrame(reader io.Reader) (AuthFrame, error) {
 }
 
 func hmacSHA256(key, input []byte) [sha256.Size]byte {
-	mac := hmac.New(sha256.New, key)
-	_, _ = mac.Write(input)
+	// NW3's derivation labels and Prelude inputs fit in one short message.
+	// Keep the standard HMAC construction on stack-backed SHA-256 inputs rather
+	// than allocating hash.Hash objects for every candidate in a cold scan.
+	if len(key) <= sha256.BlockSize && len(input) <= sha256.BlockSize {
+		var inner [2 * sha256.BlockSize]byte
+		var outer [sha256.BlockSize + sha256.Size]byte
+		for i := range sha256.BlockSize {
+			var value byte
+			if i < len(key) {
+				value = key[i]
+			}
+			inner[i], outer[i] = value^0x36, value^0x5c
+		}
+		copy(inner[sha256.BlockSize:], input)
+		digest := sha256.Sum256(inner[:sha256.BlockSize+len(input)])
+		copy(outer[sha256.BlockSize:], digest[:])
+		return sha256.Sum256(outer[:])
+	}
+	// Preserve general HMAC behavior. Copies keep callers' short input arrays
+	// from escaping through the fallback's hash.Hash interfaces.
+	keyCopy := append([]byte(nil), key...)
+	inputCopy := append([]byte(nil), input...)
+	mac := hmac.New(sha256.New, keyCopy)
+	_, _ = mac.Write(inputCopy)
 	var output [sha256.Size]byte
 	copy(output[:], mac.Sum(nil))
 	return output

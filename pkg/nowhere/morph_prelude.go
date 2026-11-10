@@ -31,18 +31,37 @@ func preludeInput(prelude []byte, nonce []byte) [62]byte {
 }
 
 func decodePrelude(keys MorphKeys, prelude, nonce []byte) (preludeIdentity, bool) {
-	if len(prelude) != 64 || len(nonce) != 12 {
+	prepared, ok := preparePrelude(prelude, nonce)
+	if !ok {
 		return preludeIdentity{}, false
 	}
-	input := preludeInput(prelude, nonce)
-	mask := hmacSHA256(keys.PreludeMask[:], input[:48])
-	var payload [28]byte
+	return prepared.decode(&keys)
+}
+
+// The bit unpacking and nonce/header assembly do not depend on the key.
+// Perform them once per connection, not once per user inspected.
+type preparedPrelude struct {
+	input   [62]byte
+	payload [28]byte
+}
+
+func preparePrelude(prelude, nonce []byte) (preparedPrelude, bool) {
+	if len(prelude) != 64 || len(nonce) != 12 {
+		return preparedPrelude{}, false
+	}
+	prepared := preparedPrelude{input: preludeInput(prelude, nonce)}
 	for i, value := range prelude[32:64] {
 		for bit := 0; bit < 7; bit++ {
 			offset := i*7 + bit
-			payload[offset/8] |= ((value >> uint(6-bit)) & 1) << uint(7-offset%8)
+			prepared.payload[offset/8] |= ((value >> uint(6-bit)) & 1) << uint(7-offset%8)
 		}
 	}
+	return prepared, true
+}
+
+func (prepared *preparedPrelude) decode(keys *MorphKeys) (preludeIdentity, bool) {
+	input, payload := prepared.input, prepared.payload
+	mask := hmacSHA256(keys.PreludeMask[:], input[:48])
 	for i := range payload {
 		payload[i] ^= mask[i]
 	}
