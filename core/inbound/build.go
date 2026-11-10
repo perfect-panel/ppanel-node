@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/perfect-panel/ppanel-node/api/panel"
+	"github.com/perfect-panel/ppanel-node/core/protocol/nowhere"
 	tuiccompat "github.com/perfect-panel/ppanel-node/core/transport/tuic"
 	"github.com/xtls/xray-core/app/proxyman"
 	"github.com/xtls/xray-core/common/net"
@@ -19,6 +20,9 @@ import (
 
 // Build builds Inbound config for different protocol.
 func Build(nodeInfo *panel.NodeInfo, tag string) (*core.InboundHandlerConfig, error) {
+	if nodeInfo.Type == "nowhere" {
+		return nowhere.Build(nodeInfo, tag)
+	}
 	in := &coreConf.InboundDetourConfig{}
 	var err error
 	switch nodeInfo.Type {

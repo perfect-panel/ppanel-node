@@ -91,6 +91,7 @@ func serverConfigResponseFromProtobuf(message *serverv1.QueryServerProtocolConfi
 		}
 		protocols = append(protocols, Protocol{
 			Type: item.Type, Port: int(item.Port), Enable: item.Enable, Security: item.Security,
+			Version: int(item.Version), Mode: item.Mode, Network: item.Network, ALPN: append([]string(nil), item.Alpn...),
 			SNI: item.Sni, AllowInsecure: item.AllowInsecure, Fingerprint: item.Fingerprint,
 			RealityServerAddr: item.RealityServerAddr, RealityServerPort: int(item.RealityServerPort),
 			RealityPrivateKey: item.RealityPrivateKey, RealityPublicKey: item.RealityPublicKey,

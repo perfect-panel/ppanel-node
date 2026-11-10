@@ -116,7 +116,7 @@ func NewServerClient(c *conf.ServerApiConfig) *ServerClient {
 // supports; callers use this to leave unsupported configurations untouched.
 func IsSupportedProtocol(protocol string) bool {
 	switch strings.ToLower(strings.TrimSpace(protocol)) {
-	case "vmess", "trojan", "shadowsocks", "tuic", "hysteria", "hysteria2", "anytls", "vless":
+	case "vmess", "trojan", "shadowsocks", "tuic", "hysteria", "hysteria2", "anytls", "vless", "nowhere":
 		return true
 	default:
 		return false

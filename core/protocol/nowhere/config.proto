@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package ppnode.nowhere;
+option go_package = "github.com/perfect-panel/ppanel-node/core/protocol/nowhere";
+
+message Config {
+  string listen = 1;
+  uint32 network = 2;
+  string certificate_file = 3;
+  string key_file = 4;
+  bool morph = 5;
+  string alpn = 6;
+}
+
+message Account {
+  string key = 1;
+}

@@ -11,6 +11,7 @@ import (
 	"github.com/perfect-panel/ppanel-node/common/counter"
 	"github.com/perfect-panel/ppanel-node/common/format"
 	"github.com/perfect-panel/ppanel-node/core/app/dispatcher"
+	"github.com/perfect-panel/ppanel-node/core/protocol/nowhere"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/serial"
 	"github.com/xtls/xray-core/infra/conf"
@@ -50,13 +51,30 @@ func (vc *XrayCore) DelUsers(users []panel.UserInfo, tag string, _ *panel.NodeIn
 	var user string
 	vc.users.mapLock.Lock()
 	defer vc.users.mapLock.Unlock()
-	for i := range users {
-		user = format.UserTag(tag, users[i].Uuid)
+	batch, batched := userManager.(interface {
+		RemoveUsers(context.Context, []string) error
+	})
+	if batched {
+		emails := make([]string, len(users))
+		for i := range users {
+			emails[i] = format.UserTag(tag, users[i].Uuid)
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		err = userManager.RemoveUser(ctx, user)
+		err = batch.RemoveUsers(ctx, emails)
 		cancel()
 		if err != nil {
 			return err
+		}
+	}
+	for i := range users {
+		user = format.UserTag(tag, users[i].Uuid)
+		if !batched {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			err = userManager.RemoveUser(ctx, user)
+			cancel()
+			if err != nil {
+				return err
+			}
 		}
 		delete(vc.users.uidMap, user)
 		if v, ok := vc.dispatcher.Counter.Load(tag); ok {
@@ -109,9 +127,6 @@ func (vc *XrayCore) GetUserTrafficSlice(tag string, mintraffic int) ([]panel.Use
 func (v *XrayCore) AddUsers(p *AddUsersParams) (added int, err error) {
 	v.users.mapLock.Lock()
 	defer v.users.mapLock.Unlock()
-	for i := range p.Users {
-		v.users.uidMap[format.UserTag(p.Tag, p.Users[i].Uuid)] = p.Users[i].Id
-	}
 	var users []*protocol.User
 	switch p.NodeInfo.Type {
 	case "vmess":
@@ -131,6 +146,13 @@ func (v *XrayCore) AddUsers(p *AddUsersParams) (added int, err error) {
 		users = buildTuicUsers(p.Tag, p.Users)
 	case "anytls":
 		users = buildAnyTLSUsers(p.Tag, p.Users)
+	case "nowhere":
+		for _, user := range p.Users {
+			if user.Id <= 0 {
+				return 0, fmt.Errorf("nowhere: invalid subscription ID %d", user.Id)
+			}
+			users = append(users, &protocol.User{Level: 0, Email: format.UserTag(p.Tag, user.Uuid), Account: serial.ToTypedMessage(&nowhere.Account{Key: user.Uuid})})
+		}
 	default:
 		return 0, fmt.Errorf("unsupported node type: %s", p.NodeInfo.Type)
 	}
@@ -138,17 +160,36 @@ func (v *XrayCore) AddUsers(p *AddUsersParams) (added int, err error) {
 	if err != nil {
 		return 0, fmt.Errorf("get user manager error: %s", err)
 	}
+	parsed := make([]*protocol.MemoryUser, 0, len(users))
 	for _, u := range users {
 		mUser, err := u.ToMemoryUser()
 		if err != nil {
 			return 0, err
 		}
+		parsed = append(parsed, mUser)
+	}
+	if batch, ok := man.(interface {
+		AddUsers(context.Context, []*protocol.MemoryUser) error
+	}); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err = batch.AddUsers(ctx, parsed)
+		cancel()
+		if err != nil {
+			return 0, err
+		}
+		for i, user := range parsed {
+			v.users.uidMap[user.Email] = p.Users[i].Id
+		}
+		return len(parsed), nil
+	}
+	for i, mUser := range parsed {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		err = man.AddUser(ctx, mUser)
 		cancel()
 		if err != nil {
 			return 0, err
 		}
+		v.users.uidMap[mUser.Email] = p.Users[i].Id
 	}
 	return len(users), nil
 }

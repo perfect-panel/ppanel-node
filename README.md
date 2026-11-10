@@ -98,6 +98,35 @@ GOTOOLCHAIN=go1.27.1 go test ./api/panel -run '^$' -bench BenchmarkDecodeUserLis
 go test ./limiter -run '^$' -bench '^BenchmarkAcquireCachedDevice$' -benchmem
 ```
 
+## Nowhere（NW3）
+
+Nowhere 使用原生 Go NW3 实现，对齐 Nowhere 3.3.0。
+协议模块位于 `pkg/nowhere`，通过本地 Xray 入站适配器复用路由、限速、设备准入、
+流量统计及用户撤销；不修改 Xray fork 或全局 Go 模块缓存。来源与许可证见
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+面板必须支持 NW3 下发：`type=nowhere`、`version=3`、`security=tls`、ALPN `nw3`，
+`network` 为 `mix`（同端口 TCP/TLS + QUIC）、`tcp` 或 `udp`。`obfs` 默认 `morph`，
+可设为 `none`。证书继续使用已有的 `self/file/http/dns` 配置。旧 `now/1` 线协议不兼容。
+用户认证字段必须是 32 位小写十六进制文本；新版 backend 会把该协议的订阅 UUID
+转换为此格式，节点不自行猜测或转换其他格式的凭据。
+
+支持 TCP 和 UDP（TLS 上使用 UoT，QUIC 上使用 DATAGRAM 分片），无载荷时先返回
+setup 结果。认证、连接数和流数量均设有资源上限；用户批量更新只发布一次
+认证表，撤销会关闭该用户的物理连接及其全部流。上传和下载均经过套餐速率限制。
+
+UDP 转发仍受当前 Xray 出站实现约束：空 UDP 数据报不会转发，默认 freedom 出站
+接收缓冲为 8 KiB；大于此大小的响应可能被截断。这是节点数据平面的边界，NW3
+协议核心的分片上限不改变该边界。远程 Egress 扩展未实现。
+
+除根模块测试外，验证协议模块及独立的 Rust 3.3.0 客户端互通：
+
+```bash
+(cd pkg/nowhere && go test -race ./...)
+NOWHERE_RUST_VECTOR_BINARY=/path/to/nowhere-3.3.0 \
+  go test -race ./core -run '^TestNowhereRustInterop$' -count=1 -timeout=3m
+```
+
 ## 流量与重载
 
 流量通过原子交换取数，未获面板确认的批次会在内存中合并并重试，重载及移除协议时也会保留。

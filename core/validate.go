@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/perfect-panel/ppanel-node/api/panel"
+	"github.com/perfect-panel/ppanel-node/core/protocol/nowhere"
 )
 
 func ValidateServerConfig(serverconfig *panel.ServerConfigResponse) error {
@@ -40,6 +41,8 @@ func validateProtocol(protocol panel.Protocol) error {
 	}
 
 	switch protocol.Type {
+	case "nowhere":
+		return nowhere.ValidateProtocol(protocol)
 	case "vless", "vmess", "trojan":
 		if err := validateStreamProtocol(protocol); err != nil {
 			return err
