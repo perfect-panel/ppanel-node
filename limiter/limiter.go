@@ -4,6 +4,7 @@ import (
 	"errors"
 	"maps"
 	"sync"
+	"time"
 
 	"github.com/perfect-panel/ppanel-node/api/panel"
 	"github.com/perfect-panel/ppanel-node/common/format"
@@ -27,6 +28,8 @@ type Limiter struct {
 	UserLimitInfo *sync.Map      // Key: TagUUID, value: UserLimitInfo
 	SpeedLimiter  *sync.Map      // key: TagUUID, value: *ratelimit.Bucket
 	admitDevice   DeviceAdmission
+	admission     deviceAdmissionState // guarded by aliveMu
+	clock         func() time.Time
 	online        map[int]map[string]*onlineDevice
 	aliveMu       sync.RWMutex
 	aliveList     map[int]int // Key: Uid, value: alive_ip; owned by this limiter
@@ -44,6 +47,7 @@ type UserLimitInfo struct {
 func (m *Manager) Add(tag string, users []panel.UserInfo, aliveList map[int]int, nodeType string) *Limiter {
 	info := &Limiter{
 		NodeType:      nodeType,
+		clock:         time.Now,
 		online:        make(map[int]map[string]*onlineDevice),
 		UserLimitInfo: new(sync.Map),
 		SpeedLimiter:  new(sync.Map),
@@ -127,6 +131,14 @@ func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel
 		userLimit.OverLimit = false
 		l.UserLimitInfo.Store(format.UserTag(tag, added[i].Uuid), userLimit)
 		l.UUIDtoUID[added[i].Uuid] = added[i].Id
+	}
+	// In-flight grants belong to this exact user incarnation, not just a UID
+	// that could have been removed and re-added while the panel was responding.
+	for key, claim := range l.admission.claims {
+		if !l.claimUserCurrent(claim) {
+			claim.cancel()
+			delete(l.admission.claims, key)
+		}
 	}
 }
 

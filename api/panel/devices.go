@@ -67,6 +67,8 @@ func (c *NodeClient) GetUserAlive(ctx context.Context) (map[int]int, error) {
 // decoding failures are errors, never implicit permission to admit a device.
 func (c *NodeClient) ClaimDevice(ctx context.Context, id int, ip string) (bool, time.Duration, error) {
 	const path = "/v1/server/device"
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	req := c.Client.R().SetContext(ctx)
 	if c.UseProtobuf {
 		if err := setProtobufRequestBody(req, &serverv1.ClaimServerDeviceRequest{UserId: int64(id), Ip: ip}); err != nil {
@@ -80,7 +82,7 @@ func (c *NodeClient) ClaimDevice(ctx context.Context, id int, ip string) (bool, 
 		return false, 0, fmt.Errorf("claim device: %w", err)
 	}
 	if err := checkPanelResponse(r, c.APIHost+path); err != nil {
-		return false, 0, err
+		return false, 0, withRetryAfter(err, r.Header().Get("Retry-After"), time.Now())
 	}
 	var allowed bool
 	var ttl int64
