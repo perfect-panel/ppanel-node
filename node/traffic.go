@@ -2,11 +2,17 @@ package node
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"sync"
 
 	"github.com/perfect-panel/ppanel-node/api/panel"
 )
+
+// Match the panel's per-subscription admission bound, and keep SQL/HTTP
+// request size bounded when many users accumulate traffic during an outage.
+const maxTrafficReportBytes int64 = 10 << 40
+const maxTrafficReportUsers = 1000
 
 type trafficDestination struct {
 	host, secret, protocol string
@@ -14,13 +20,14 @@ type trafficDestination struct {
 }
 
 type trafficBatch struct {
-	client *panel.NodeClient
-	users  map[int]panel.UserTraffic
+	client   *panel.NodeClient
+	users    map[int]panel.UserTraffic
+	inflight []panel.UserTraffic
+	reportID string
 }
 
 // trafficQueue survives core replacement, including reports for removed nodes.
-// The panel has no idempotency key, so failed/ambiguous requests are retried with
-// at-least-once delivery; successful batches are removed only after an ACK.
+// An uncertain send is frozen until ACK. New deltas accumulate separately.
 type trafficQueue struct {
 	mu      sync.Mutex
 	pending map[trafficDestination]*trafficBatch
@@ -60,12 +67,34 @@ func (q *trafficQueue) report(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return errors.Join(result, ctx.Err())
 		}
-		traffic := make([]panel.UserTraffic, 0, len(batch.users))
-		for _, value := range batch.users {
-			traffic = append(traffic, value)
+		for batch.inflight != nil || len(batch.users) > 0 {
+			if batch.inflight == nil {
+				batch.reportID = rand.Text()
+				batch.inflight = make([]panel.UserTraffic, 0, min(len(batch.users), maxTrafficReportUsers))
+				for id, pending := range batch.users {
+					part := pending
+					part.Upload = min(part.Upload, maxTrafficReportBytes)
+					part.Download = min(part.Download, maxTrafficReportBytes-part.Upload)
+					batch.inflight = append(batch.inflight, part)
+					if part == pending {
+						delete(batch.users, id)
+					} else {
+						pending.Upload -= part.Upload
+						pending.Download -= part.Download
+						batch.users[id] = pending
+					}
+					if len(batch.inflight) == maxTrafficReportUsers {
+						break
+					}
+				}
+			}
+			if err := batch.client.ReportTrafficBatch(ctx, batch.reportID, batch.inflight); err != nil {
+				result = errors.Join(result, err)
+				break
+			}
+			batch.inflight = nil
 		}
-		if err := batch.client.ReportUserTraffic(ctx, &traffic); err != nil {
-			result = errors.Join(result, err)
+		if batch.inflight != nil {
 			continue
 		}
 		delete(q.pending, key)

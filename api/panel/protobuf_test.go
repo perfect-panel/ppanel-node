@@ -128,6 +128,9 @@ func TestNodeClientUsesProtobuf(t *testing.T) {
 			}
 			writeProtobuf(t, writer, &serverv1.Result{Code: http.StatusOK, Message: "success"})
 		case "/v1/server/push":
+			if request.Header.Get("Idempotency-Key") != "wire-protobuf" {
+				t.Fatal("traffic request lost its batch ID")
+			}
 			message := &serverv1.PushUserTrafficRequest{}
 			if err := proto.Unmarshal(readRequestBody(t, request), message); err != nil {
 				t.Fatalf("traffic request: %v", err)
@@ -166,7 +169,7 @@ func TestNodeClientUsesProtobuf(t *testing.T) {
 	if err := client.ReportNodeOnlineUsers(context.Background(), &[]OnlineUser{{UID: 1, IP: "203.0.113.1"}}); err != nil {
 		t.Fatalf("ReportNodeOnlineUsers() error = %v", err)
 	}
-	if err := client.ReportUserTraffic(context.Background(), &[]UserTraffic{{UID: 1, Upload: 10, Download: 20}}); err != nil {
+	if err := client.ReportTrafficBatch(context.Background(), "wire-protobuf", []UserTraffic{{UID: 1, Upload: 10, Download: 20}}); err != nil {
 		t.Fatalf("ReportUserTraffic() error = %v", err)
 	}
 	if err := client.ReportNodeStatus(&NodeStatus{CPU: 0.5, Mem: 0.6, Disk: 0.7}); err != nil {

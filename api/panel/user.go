@@ -2,6 +2,7 @@ package panel
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -147,23 +148,25 @@ type UserTraffic struct {
 }
 
 func (c *NodeClient) ReportUserTraffic(ctx context.Context, userTraffic *[]UserTraffic) error {
+	return c.ReportTrafficBatch(ctx, rand.Text(), *userTraffic)
+}
+
+// ReportTrafficBatch sends an immutable delta snapshot. The caller retains
+// both id and traffic until the panel acknowledges it.
+func (c *NodeClient) ReportTrafficBatch(ctx context.Context, id string, traffic []UserTraffic) error {
 	if c.UseProtobuf {
-		return c.reportUserTrafficProtobuf(ctx, userTraffic)
-	}
-	traffic := make([]UserTraffic, 0)
-	for _, t := range *userTraffic {
-		traffic = append(traffic, UserTraffic{
-			UID:      t.UID,
-			Upload:   t.Upload,
-			Download: t.Download,
-		})
+		return c.reportUserTrafficProtobuf(ctx, id, traffic)
 	}
 	p := "/v1/server/push"
+	if traffic == nil {
+		traffic = []UserTraffic{}
+	}
 	req := ServerPushUserTrafficRequest{
 		Traffic: traffic,
 	}
 	r, err := c.Client.R().
 		SetContext(ctx).
+		SetHeader("Idempotency-Key", id).
 		SetBody(req).
 		ForceContentType("application/json").
 		Post(p)
@@ -173,17 +176,17 @@ func (c *NodeClient) ReportUserTraffic(ctx context.Context, userTraffic *[]UserT
 	return checkPanelResponse(r, path.Join(c.APIHost+p))
 }
 
-func (c *NodeClient) reportUserTrafficProtobuf(ctx context.Context, userTraffic *[]UserTraffic) error {
+func (c *NodeClient) reportUserTrafficProtobuf(ctx context.Context, id string, userTraffic []UserTraffic) error {
 	const p = "/v1/server/push"
-	traffic := make([]*serverv1.UserTraffic, 0, len(*userTraffic))
-	for _, item := range *userTraffic {
+	traffic := make([]*serverv1.UserTraffic, 0, len(userTraffic))
+	for _, item := range userTraffic {
 		traffic = append(traffic, &serverv1.UserTraffic{
 			UserId:   int64(item.UID),
 			Upload:   item.Upload,
 			Download: item.Download,
 		})
 	}
-	request := c.Client.R().SetContext(ctx)
+	request := c.Client.R().SetContext(ctx).SetHeader("Idempotency-Key", id)
 	if err := setProtobufRequestBody(request, &serverv1.PushUserTrafficRequest{Traffic: traffic}); err != nil {
 		return err
 	}
